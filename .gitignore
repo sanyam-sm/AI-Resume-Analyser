@@ -1,0 +1,8 @@
+# Ignore environment variables
+.env
+
+# Ignore temporary Claude files
+tmpclaude-*
+
+# Ignore the 'nul' file (likely a system artifact)
+nul

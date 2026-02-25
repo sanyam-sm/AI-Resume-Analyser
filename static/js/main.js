@@ -53,7 +53,7 @@ function handleFile(file) {
   if (file.type !== 'application/pdf') { showError('Please upload a PDF file.'); return; }
   if (file.size > 10 * 1024 * 1024)   { showError('File too large. Max 10 MB.'); return; }
 
-  fileInfo.textContent = `\u{1F4CE} ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+  fileInfo.textContent = `📎 ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
   fileInfo.style.display = 'block';
   analyzeResume(file);
 }
@@ -93,7 +93,7 @@ function showError(msg) {
   loader.style.display        = 'none';
   document.querySelector('.hero').style.display = 'block';
   errorBox.style.display      = 'block';
-  errorBox.textContent        = '\u26A0 ' + msg;
+  errorBox.textContent        = '⚠ ' + msg;
 }
 
 // ── Render All Results ────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ function renderModelBanner(meta, data) {
   const navBadge = document.getElementById('nav-badge');
 
   if (!meta || meta.status === 'error') {
-    el.innerHTML = `<div class="model-banner-left"><span class="model-banner-icon">\u{1F916}</span>
+    el.innerHTML = `<div class="model-banner-left"><span class="model-banner-icon">🤖</span>
       <div><div class="model-banner-name">AI Resume Analyzer</div>
       <div class="model-banner-sub">Run the Jupyter notebook to train models</div></div></div>`;
     return;
@@ -134,21 +134,20 @@ function renderModelBanner(meta, data) {
   const isBert = mode === 'bert';
   const hasNer = meta.ner_available;
 
-  // Update nav badge
   if (navBadge) {
     navBadge.textContent = isBert ? 'BERT + NER Powered' : 'ML + NER Powered';
   }
 
   const modeName = isBert ? 'BERT Domain Classifier' : (meta.model_name || 'ML Model');
-  const acc = isBert ? (meta.bert_accuracy || meta.accuracy || '\u2014') : (meta.accuracy || '\u2014');
-  const f1 = isBert ? (meta.bert_f1 || meta.f1_weighted || '\u2014') : (meta.f1_weighted || '\u2014');
+  const acc = isBert ? (meta.bert_accuracy || meta.accuracy || '—') : (meta.accuracy || '—');
+  const f1 = isBert ? (meta.bert_f1 || meta.f1_weighted || '—') : (meta.f1_weighted || '—');
 
   el.innerHTML = `
     <div class="model-banner-left">
-      <span class="model-banner-icon">\u{1F9E0}</span>
+      <span class="model-banner-icon">🧠</span>
       <div>
         <div class="model-banner-name">${modeName}</div>
-        <div class="model-banner-sub">${meta.num_classes || 24} resume categories \u00B7 ${(meta.train_samples || 0).toLocaleString()} training samples</div>
+        <div class="model-banner-sub">${meta.num_classes || 24} resume categories · ${(meta.train_samples || 0).toLocaleString()} training samples</div>
       </div>
     </div>
     <div class="model-pills">
@@ -156,7 +155,7 @@ function renderModelBanner(meta, data) {
       ${hasNer ? '<span class="model-pill" style="background:rgba(168,85,247,.1);border-color:rgba(168,85,247,.2);color:var(--violet2)">NER</span>' : ''}
       <span class="model-pill">Acc: ${acc}%</span>
       <span class="model-pill" style="background:rgba(6,182,212,.1);border-color:rgba(6,182,212,.2);color:var(--cyan)">F1: ${f1}%</span>
-      <span class="model-pill" style="background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.2);color:var(--emerald)">CV: ${meta.cv_mean || '\u2014'}%</span>
+      <span class="model-pill" style="background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.2);color:var(--emerald)">CV: ${meta.cv_mean || '—'}%</span>
     </div>`;
 }
 
@@ -168,10 +167,10 @@ function renderStats(data) {
   const topMatch = jobMatches.length > 0 ? jobMatches[0].match_pct : 0;
 
   const stats = [
-    { val: s.total || 0,               label: 'Resume Score',     color: scoreColor(s.total), unit: '/100' },
-    { val: data.skills?.current?.length || 0, label: 'Skills Detected', color: 'var(--violet2)', unit: '' },
-    { val: Math.round(topMatch),       label: 'Best Job Match',   color: 'var(--emerald)',    unit: '%' },
-    { val: e.pages || 0,               label: 'Pages',            color: 'var(--amber)',      unit: '' },
+    { val: s.total || 0,                    label: 'Resume Score',    color: scoreColor(s.total), unit: '/100' },
+    { val: data.skills?.current?.length || 0, label: 'Skills Detected', color: 'var(--violet2)',   unit: '' },
+    { val: Math.round(topMatch),             label: 'Best Job Match',  color: 'var(--emerald)',    unit: '%' },
+    { val: e.pages || 0,                     label: 'Pages',           color: 'var(--amber)',      unit: '' },
   ];
 
   document.getElementById('stat-grid').innerHTML = stats.map(s => `
@@ -183,8 +182,8 @@ function renderStats(data) {
 
 // ── Profile Card ──────────────────────────────────────────────────────────────
 function renderProfile(data) {
-  const e   = data.extracted  || {};
-  const p   = data.prediction || {};
+  const e   = data.extracted    || {};
+  const p   = data.prediction   || {};
   const ner = data.ner_entities || {};
   const lvl = p.experience_level || 'Unknown';
   const initials = (e.name || 'RR').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
@@ -197,11 +196,11 @@ function renderProfile(data) {
     <div class="card-title"><span class="dot" style="background:var(--cyan)"></span>Candidate Profile</div>
     <div class="profile-avatar">${initials}</div>
     <div class="profile-name">${e.name || 'Name not detected'}</div>
-    <div class="profile-meta">\u{1F4E7} ${e.email || 'Email not found'}</div>
-    <div class="profile-meta">\u{1F4DE} ${e.phone || 'Phone not found'}</div>
-    ${location ? `<div class="profile-meta">\u{1F4CD} ${location}</div>` : ''}
-    <div class="profile-meta">\u{1F4C4} ${e.pages || 1} page${e.pages !== 1 ? 's' : ''} \u00B7 ${(e.word_count || 0).toLocaleString()} words</div>
-    <span class="badge-level ${badgeClass}">\u2B21 ${lvl}</span>
+    <div class="profile-meta">📧 ${e.email || 'Email not found'}</div>
+    <div class="profile-meta">📞 ${e.phone || 'Phone not found'}</div>
+    ${location ? `<div class="profile-meta">📍 ${location}</div>` : ''}
+    <div class="profile-meta">📄 ${e.pages || 1} page${e.pages !== 1 ? 's' : ''} · ${(e.word_count || 0).toLocaleString()} words</div>
+    <span class="badge-level ${badgeClass}">⬡ ${lvl}</span>
   `;
 }
 
@@ -219,8 +218,8 @@ function renderCategory(data) {
 
   document.getElementById('card-category').innerHTML = `
     <div class="card-title"><span class="dot" style="background:var(--violet2)"></span>${isBert ? 'BERT' : 'ML'} Prediction</div>
-    <div class="category-name">${p.category || '\u2014'}</div>
-    <div class="category-sub">Predicted job category \u00B7 ${conf.toFixed(1)}% confidence</div>
+    <div class="category-name">${p.category || '—'}</div>
+    <div class="category-sub">Predicted job category · ${conf.toFixed(1)}% confidence</div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-top:8px;">
       <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
         <span style="font-size:.82rem;color:var(--txt2)">Model Confidence</span>
@@ -236,7 +235,7 @@ function renderCategory(data) {
 
 // ── Score Card ────────────────────────────────────────────────────────────────
 function renderScore(data) {
-  const s   = data.score || { total: 0, max: 100, breakdown: {} };
+  const s = data.score || { total: 0, max: 100, breakdown: {} };
 
   const breakdownHtml = Object.entries(s.breakdown || {}).map(([name, info]) => {
     const pct2 = info.max > 0 ? Math.round((info.earned / info.max) * 100) : 0;
@@ -310,7 +309,7 @@ function renderPredictions(data) {
   const html = preds.map((p, i) => `
     <div class="pred-row">
       <div class="pred-meta">
-        <span class="pred-label">${i === 0 ? '\u{1F3C6} ' : ''}${p.label}</span>
+        <span class="pred-label">${i === 0 ? '🏆 ' : ''}${p.label}</span>
         <span class="pred-pct">${p.confidence.toFixed(1)}%</span>
       </div>
       <div class="pred-bar-bg">
@@ -324,13 +323,12 @@ function renderPredictions(data) {
   animateBars();
 }
 
-// ── Skills Card (NER-extracted with confidence) ──────────────────────────────
+// ── Skills Card ───────────────────────────────────────────────────────────────
 function renderSkills(data) {
   const current    = data.skills?.current || [];
   const withConf   = data.skills?.current_with_confidence || [];
   const skillGaps  = data.skill_gaps || [];
 
-  // Collect all missing skills from gaps for the "recommended" section
   const missingSet = new Set();
   skillGaps.forEach(gap => {
     (gap.missing_core_skills || []).forEach(s => missingSet.add(s));
@@ -338,7 +336,6 @@ function renderSkills(data) {
   });
   const recommended = [...missingSet].slice(0, 12);
 
-  // Show skills with confidence if available
   let currentHtml = '';
   if (withConf.length > 0) {
     currentHtml = withConf.map((s, i) => {
@@ -354,7 +351,7 @@ function renderSkills(data) {
 
   const recHtml = recommended.length > 0
     ? recommended.map((s, i) => `<span class="skill-tag missing" style="animation-delay:${i * 0.04}s">+ ${s}</span>`).join('')
-    : '<span style="color:var(--txt2);font-size:.85rem">No skill gaps identified \u2014 your profile is strong!</span>';
+    : '<span style="color:var(--txt2);font-size:.85rem">No skill gaps identified — your profile is strong!</span>';
 
   document.getElementById('card-skills').innerHTML = `
     <div class="card-title"><span class="dot" style="background:var(--rose)"></span>Skills Analysis</div>
@@ -365,62 +362,84 @@ function renderSkills(data) {
     <div>
       <div style="font-size:.82rem;font-weight:600;color:var(--txt2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.05em">Skills to Develop (${recommended.length})</div>
       <div class="skills-grid">${recHtml}</div>
-      ${recommended.length ? `<p style="margin-top:12px;font-size:.8rem;color:var(--txt2)">\u{1F4A1} Adding these skills can boost your match for top roles in <strong style="color:var(--violet2)">${data.prediction?.category || 'your field'}</strong>.</p>` : ''}
+      ${recommended.length ? `<p style="margin-top:12px;font-size:.8rem;color:var(--txt2)">💡 Adding these skills can boost your match for top roles in <strong style="color:var(--violet2)">${data.prediction?.category || 'your field'}</strong>.</p>` : ''}
     </div>`;
 }
 
-// ── NER Extracted Entities ───────────────────────────────────────────────────
+// ── NER Extracted Entities ────────────────────────────────────────────────────
+// Now uses structured experience_entries and education_entries from regex parser
 function renderNerEntities(data) {
   const ner = data.ner_entities || {};
   const el  = document.getElementById('card-ner-entities');
 
-  const entitySections = [
-    { label: 'Companies',        items: ner.companies || [],         icon: '\u{1F3E2}' },
-    { label: 'Designations',     items: ner.designations || [],      icon: '\u{1F4BC}' },
-    { label: 'Degrees',          items: ner.degrees || [],           icon: '\u{1F393}' },
-    { label: 'Colleges',         items: ner.college_names || [],     icon: '\u{1F3EB}' },
-    { label: 'Graduation Years', items: ner.graduation_years || [],  icon: '\u{1F4C5}' },
-    { label: 'Locations',        items: ner.locations || [],         icon: '\u{1F4CD}' },
-  ];
+  const expEntries = ner.experience_entries || [];
+  const eduEntries = ner.education_entries  || [];
+  const locations  = ner.locations          || [];
+  const yoe        = ner.years_of_experience || '';
 
-  const yoe = ner.years_of_experience || '';
+  // Build experience rows: "Senior Backend Engineer @ Razorpay (Jan 2021 – Present)"
+  const expHtml = expEntries.length > 0
+    ? expEntries.map(e => {
+        const line = [
+          e.designation ? `<strong>${escapeHtml(e.designation)}</strong>` : '',
+          e.company     ? `@ ${escapeHtml(e.company)}` : '',
+          e.duration    ? `<span style="color:var(--txt3)">(${escapeHtml(e.duration)})</span>` : '',
+        ].filter(Boolean).join(' ');
+        return `<div style="margin-bottom:4px">${line}</div>`;
+      }).join('')
+    : '<span style="color:var(--txt3);font-size:.82rem">Not detected</span>';
 
-  // Filter only sections that have data
-  const populated = entitySections.filter(s => s.items.length > 0);
+  // Build education rows: "B.Tech in Computer Engineering | Savitribai Phule Pune University | 2019"
+  const eduHtml = eduEntries.length > 0
+    ? eduEntries.map(e => {
+        const parts = [
+          e.degree  ? `<strong>${escapeHtml(e.degree)}</strong>`  : '',
+          e.college ? escapeHtml(e.college) : '',
+          e.year    ? `<span style="color:var(--txt3)">${escapeHtml(e.year)}</span>` : '',
+        ].filter(Boolean);
+        return `<div style="margin-bottom:4px">${parts.join(' <span style="color:var(--txt3)">|</span> ')}</div>`;
+      }).join('')
+    : '<span style="color:var(--txt3);font-size:.82rem">Not detected</span>';
 
-  if (populated.length === 0 && !yoe) {
+  // Locations
+  const locHtml = locations.length > 0
+    ? locations.map(l => {
+        const text = typeof l === 'object' ? l.text : l;
+        const conf = typeof l === 'object' && l.confidence
+          ? `<span class="ner-confidence">(${(l.confidence * 100).toFixed(0)}%)</span>` : '';
+        return `${escapeHtml(text)}${conf}`;
+      }).join(', ')
+    : '<span style="color:var(--txt3);font-size:.82rem">Not detected</span>';
+
+  // Check if anything to show
+  const hasData = expEntries.length || eduEntries.length || locations.length || yoe;
+  if (!hasData) {
     el.innerHTML = `
       <div class="card-title"><span class="dot" style="background:var(--cyan)"></span>NER Extracted Details</div>
-      <div class="empty-state">No entities extracted by NER model.</div>`;
+      <div class="empty-state">No entities extracted.</div>`;
     return;
   }
-
-  const rowsHtml = populated.map(section => {
-    const values = section.items.map(item => {
-      const text = typeof item === 'object' ? item.text : item;
-      const conf = typeof item === 'object' && item.confidence
-        ? `<span class="ner-confidence">(${(item.confidence * 100).toFixed(0)}%)</span>` : '';
-      return `${escapeHtml(text)}${conf}`;
-    }).join(', ');
-
-    return `<tr>
-      <td>${section.icon} ${section.label}</td>
-      <td>${values}</td>
-    </tr>`;
-  }).join('');
-
-  const yoeRow = yoe
-    ? `<tr><td>\u{23F3} Experience</td><td>${escapeHtml(yoe)}</td></tr>` : '';
 
   el.innerHTML = `
     <div class="card-title"><span class="dot" style="background:var(--cyan)"></span>NER Extracted Details</div>
     <table class="ner-table">
       <thead><tr><th>Entity Type</th><th>Extracted Values</th></tr></thead>
-      <tbody>${rowsHtml}${yoeRow}</tbody>
+      <tbody>
+        <tr>
+          <td>💼 Work Experience</td>
+          <td>${expHtml}</td>
+        </tr>
+        <tr>
+          <td>🎓 Education</td>
+          <td>${eduHtml}</td>
+        </tr>
+        ${locations.length ? `<tr><td>📍 Locations</td><td>${locHtml}</td></tr>` : ''}
+        ${yoe ? `<tr><td>⏳ Experience</td><td>${escapeHtml(yoe)}</td></tr>` : ''}
+      </tbody>
     </table>`;
 }
 
-// ── Job Role Matches ─────────────────────────────────────────────────────────
+// ── Job Role Matches ──────────────────────────────────────────────────────────
 function renderJobMatches(data) {
   const matches = data.job_matches || [];
   const el = document.getElementById('card-job-matches');
@@ -450,7 +469,7 @@ function renderJobMatches(data) {
     return `
       <div class="job-match-row">
         <div class="job-match-header">
-          <span class="job-match-role">${i === 0 ? '\u{1F3AF} ' : ''}${m.role}</span>
+          <span class="job-match-role">${i === 0 ? '🎯 ' : ''}${m.role}</span>
           <span class="job-match-pct" style="color:${m.match_pct >= 70 ? 'var(--emerald)' : m.match_pct >= 40 ? 'var(--cyan)' : 'var(--rose)'}">${m.match_pct.toFixed(1)}%</span>
         </div>
         <div class="job-match-bar-bg">
@@ -466,7 +485,7 @@ function renderJobMatches(data) {
   animateBars();
 }
 
-// ── Skill Gaps ───────────────────────────────────────────────────────────────
+// ── Skill Gaps ────────────────────────────────────────────────────────────────
 function renderSkillGaps(data) {
   const gaps = data.skill_gaps || [];
   const el   = document.getElementById('card-skill-gaps');
@@ -502,7 +521,7 @@ function renderSkillGaps(data) {
     ${html}`;
 }
 
-// ── Project Ideas ────────────────────────────────────────────────────────────
+// ── Project Ideas ─────────────────────────────────────────────────────────────
 function renderProjectIdeas(data) {
   const projects = data.project_ideas || [];
   const el = document.getElementById('card-project-ideas');
@@ -538,16 +557,16 @@ function renderProjectIdeas(data) {
     ${html}`;
 }
 
-// ── Courses Card ─────────────────────────────────────────────────────────────
+// ── Courses Card ──────────────────────────────────────────────────────────────
 function renderCourses(data) {
   const courses = data.courses || [];
   const html = courses.map(c => `
     <div class="course-item">
       <div>
-        <span class="course-name">\u{1F393} ${escapeHtml(c.name)}</span>
+        <span class="course-name">🎓 ${escapeHtml(c.name)}</span>
         ${c.reason ? `<div style="font-size:.72rem;color:var(--txt3);margin-top:2px">${escapeHtml(c.reason)}</div>` : ''}
       </div>
-      <a class="course-link" href="${c.url}" target="_blank" rel="noopener">Enroll \u2192</a>
+      <a class="course-link" href="${c.url}" target="_blank" rel="noopener">Enroll →</a>
     </div>`).join('');
 
   document.getElementById('card-courses').innerHTML = `
@@ -555,7 +574,7 @@ function renderCourses(data) {
     <div class="course-list">${html || '<div class="empty-state">No courses found for this profile.</div>'}</div>`;
 }
 
-// ── PDF Preview ──────────────────────────────────────────────────────────────
+// ── PDF Preview ───────────────────────────────────────────────────────────────
 function renderPdfPreview(data) {
   const cardPdf = document.getElementById('card-pdf');
   const frame   = document.getElementById('pdf-frame');
@@ -564,7 +583,6 @@ function renderPdfPreview(data) {
   if (data.pdf_preview) {
     cardPdf.style.display = 'block';
     const src = `data:application/pdf;base64,${data.pdf_preview}`;
-    // Remove old listeners by cloning
     const newToggle = toggle.cloneNode(true);
     toggle.parentNode.replaceChild(newToggle, toggle);
     newToggle.addEventListener('click', () => {
@@ -582,7 +600,7 @@ function renderPdfPreview(data) {
   }
 }
 
-// ── Utilities ────────────────────────────────────────────────────────────────
+// ── Utilities ─────────────────────────────────────────────────────────────────
 function animateBars() {
   requestAnimationFrame(() => {
     document.querySelectorAll('[data-target]').forEach(bar => {

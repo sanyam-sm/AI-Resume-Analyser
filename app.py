@@ -304,7 +304,7 @@ def api_analyze():
 
         name  = ner_results.get('name',  '') or extract_name(raw_text)
         email = ner_results.get('email', '') or extract_email(raw_text)
-        phone = ner_results.get('phone', '') or extract_phone(raw_text)
+        phone = ner_results.get('phone', '') or extract_phone(raw_text)  # regex handles +91 formats
 
         # ── Skill Extraction: NER + keyword merge ─────────────────────────────
         # NER alone misses/garbles many skills. Keyword scan reliably catches
@@ -356,14 +356,12 @@ def api_analyze():
                 'pages': pages, 'word_count': word_count,
             },
             'ner_entities': {
-                'companies'          : [e if isinstance(e, dict) else {'text': e} for e in ner_results.get('companies', [])],
-                'designations'       : [e if isinstance(e, dict) else {'text': e} for e in ner_results.get('designations', [])],
-                'degrees'            : [e if isinstance(e, dict) else {'text': e} for e in ner_results.get('degrees', [])],
-                'college_names'      : [e if isinstance(e, dict) else {'text': e} for e in ner_results.get('college_names', [])],
-                'graduation_years'   : [e if isinstance(e, dict) else {'text': e} for e in ner_results.get('graduation_years', [])],
+                # Structured experience: [{designation, company, duration}]
+                'experience_entries' : ner_results.get('experience_entries', []),
+                # Structured education: [{degree, college, year}]
+                'education_entries'  : ner_results.get('education_entries', []),
                 'years_of_experience': ner_results.get('years_of_experience', ''),
                 'locations'          : [e if isinstance(e, dict) else {'text': e} for e in ner_results.get('locations', [])],
-                'experience_entries' : ner_results.get('experience_entries', []),
             },
             'prediction': {
                 'category': predicted_category, 'experience_level': level,

@@ -457,57 +457,57 @@ class ResumeNERExtractor:
                     seen[key] = item
             grouped[group] = sorted(seen.values(), key=lambda x: x['confidence'], reverse=True)
 
-        # ── Regex fallbacks for entities NER often misses ────────────────
+        # ── Always use regex for structured fields — NER is unreliable here ──
+        # NER picks up garbage for companies, degrees, phone. Regex is more accurate.
         regex_exp = extract_experience(text)
         regex_edu = extract_education(text)
 
-        # Companies: NER result first, else regex
-        ner_companies = grouped.get('Companies worked at', grouped.get('Company', []))
-        if not ner_companies and regex_exp:
-            ner_companies = [{'text': e['company'], 'confidence': e['confidence']}
-                             for e in regex_exp if e['company']]
+        # Phone: always use regex (NER returns fragments like "65")
+        phone = extract_phone(text)
 
-        # Designations: NER result first, else regex
-        ner_designations = grouped.get('Designation', [])
-        if not ner_designations and regex_exp:
-            ner_designations = [{'text': e['designation'], 'confidence': e['confidence']}
-                                for e in regex_exp if e['designation']]
+        # Experience entries: structured {designation, company, duration}
+        # Always prefer regex results; only fall back to NER if regex finds nothing
+        if regex_exp:
+            experience_entries = regex_exp
+        else:
+            # Build from NER as last resort
+            ner_co   = grouped.get('Companies worked at', grouped.get('Company', []))
+            ner_desig = grouped.get('Designation', [])
+            experience_entries = []
+            for i in range(max(len(ner_co), len(ner_desig))):
+                experience_entries.append({
+                    'designation': ner_desig[i]['text'] if i < len(ner_desig) else '',
+                    'company'    : ner_co[i]['text']    if i < len(ner_co)    else '',
+                    'duration'   : '',
+                    'confidence' : 0.5,
+                })
 
-        # Degrees: NER result first, else regex
-        ner_degrees = grouped.get('Degree', [])
-        if not ner_degrees and regex_edu:
-            ner_degrees = [{'text': e['degree'], 'confidence': e['confidence']}
-                           for e in regex_edu if e['degree']]
-
-        # College names: NER result first, else regex
-        ner_colleges = grouped.get('College Name', [])
-        if not ner_colleges and regex_edu:
-            ner_colleges = [{'text': e['college'], 'confidence': e['confidence']}
-                            for e in regex_edu if e['college']]
-
-        # Graduation years: NER result first, else regex
-        ner_grad_years = grouped.get('Graduation Year', [])
-        if not ner_grad_years and regex_edu:
-            ner_grad_years = [{'text': e['year'], 'confidence': e['confidence']}
-                              for e in regex_edu if e['year']]
-
-        # Duration info — store as extra field for UI
-        experience_entries = regex_exp  # full structured experience
+        # Education entries: structured {degree, college, year}
+        if regex_edu:
+            education_entries = regex_edu
+        else:
+            ner_deg  = grouped.get('Degree', [])
+            ner_col  = grouped.get('College Name', [])
+            ner_yr   = grouped.get('Graduation Year', [])
+            education_entries = []
+            for i in range(max(len(ner_deg), len(ner_col))):
+                education_entries.append({
+                    'degree'    : ner_deg[i]['text'] if i < len(ner_deg) else '',
+                    'college'   : ner_col[i]['text'] if i < len(ner_col) else '',
+                    'year'      : ner_yr[i]['text']  if i < len(ner_yr)  else '',
+                    'confidence': 0.5,
+                })
 
         return {
-            'name':                 self._first(grouped.get('Name', [])),
-            'email':                self._first(grouped.get('Email Address', [])) or extract_email(text),
-            'phone':                self._first(grouped.get('Phone', [])) or extract_phone(text),
-            'skills':               grouped.get('Skills', []),
-            'companies':            ner_companies,
-            'designations':         ner_designations,
-            'degrees':              ner_degrees,
-            'college_names':        ner_colleges,
-            'graduation_years':     ner_grad_years,
-            'years_of_experience':  self._first(grouped.get('Years of Experience', [])),
-            'locations':            grouped.get('Location', []),
-            'experience_entries':   experience_entries,
-            'all_entities':         grouped,
+            'name':               self._first(grouped.get('Name', [])),
+            'email':              self._first(grouped.get('Email Address', [])) or extract_email(text),
+            'phone':              phone,
+            'skills':             grouped.get('Skills', []),
+            'years_of_experience': self._first(grouped.get('Years of Experience', [])),
+            'locations':          grouped.get('Location', []),
+            'experience_entries': experience_entries,
+            'education_entries':  education_entries,
+            'all_entities':       grouped,
         }
 
     def _first(self, items):

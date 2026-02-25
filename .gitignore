@@ -6,3 +6,5 @@ tmpclaude-*
 
 # Ignore the 'nul' file (likely a system artifact)
 nul
+
+__pycache__

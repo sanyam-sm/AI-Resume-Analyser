@@ -1,0 +1,122 @@
+{
+  "best_model_name": "XGBoost",
+  "accuracy": 0.839622641509434,
+  "f1_weighted": 0.8384176990246929,
+  "f1_macro": 0.8321112827536872,
+  "ner_model": "yashpwr/resume-ner-bert-v2",
+  "classes": [
+    "Advocate",
+    "Agriculture",
+    "Apparel",
+    "Architecture",
+    "Arts",
+    "Automobile",
+    "Aviation",
+    "BPO",
+    "Banking",
+    "Blockchain",
+    "Building And Construction",
+    "Business Analyst",
+    "Business-Development",
+    "Chef",
+    "Civil Engineer",
+    "Construction",
+    "Consultant",
+    "Data Science",
+    "Database",
+    "Designer",
+    "Designing",
+    "DevOps Engineer",
+    "Digital Media",
+    "Digital-Media",
+    "DotNet Developer",
+    "ETL Developer",
+    "Education",
+    "Electrical Engineering",
+    "Engineering",
+    "Finance",
+    "Fitness",
+    "Food And Beverages",
+    "HR",
+    "Health and fitness",
+    "Healthcare",
+    "Information Technology",
+    "Information-Technology",
+    "Java Developer",
+    "Management",
+    "Mechanical Engineer",
+    "Network Security Engineer",
+    "Operations Manager",
+    "PMO",
+    "Public Relations",
+    "Public-Relations",
+    "Python Developer",
+    "React Developer",
+    "SAP Developer",
+    "Sales",
+    "Teacher",
+    "Testing",
+    "Web Designing"
+  ],
+  "num_classes": 52,
+  "tfidf_features": 10000,
+  "train_samples": 11446,
+  "test_samples": 2862,
+  "cv_mean": 0.8322375390271027,
+  "cv_std": 0.0022620617082657756,
+  "all_results": {
+    "Accuracy": {
+      "XGBoost": 0.8396,
+      "LightGBM": 0.84,
+      "Linear SVC": 0.812,
+      "Logistic Regression": 0.8085,
+      "Random Forest": 0.7593,
+      "Naive Bayes": 0.6523
+    },
+    "F1-Macro": {
+      "XGBoost": 0.8321,
+      "LightGBM": 0.8231,
+      "Linear SVC": 0.7914,
+      "Logistic Regression": 0.7845,
+      "Random Forest": 0.7029,
+      "Naive Bayes": 0.5948
+    },
+    "F1-Weighted": {
+      "XGBoost": 0.8384,
+      "LightGBM": 0.8372,
+      "Linear SVC": 0.8083,
+      "Logistic Regression": 0.8057,
+      "Random Forest": 0.7424,
+      "Naive Bayes": 0.637
+    }
+  },
+  "best_hyperparams": {
+    "Logistic Regression": {
+      "C": 10
+    },
+    "Linear SVC": {
+      "C": 10
+    },
+    "Naive Bayes": {
+      "alpha": 0.1
+    },
+    "Random Forest": {
+      "n_estimators": 75,
+      "max_depth": 25,
+      "max_features": "sqrt",
+      "note": "fixed"
+    },
+    "XGBoost": {
+      "n_estimators": 75,
+      "learning_rate": 0.1,
+      "max_depth": 4,
+      "note": "fixed"
+    },
+    "LightGBM": {
+      "n_estimators": 200,
+      "learning_rate": 0.1,
+      "num_leaves": 63,
+      "note": "fixed"
+    }
+  }
+}

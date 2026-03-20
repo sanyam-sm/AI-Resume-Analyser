@@ -61,10 +61,10 @@ def load_models():
         'meta': {}, 'ner_extractor': None, 'mode': 'none',
     }
     try:
-        components['ml_model']      = joblib.load(MODEL_DIR / 'resume_model.pkl')
-        components['tfidf']         = joblib.load(MODEL_DIR / 'tfidf_vectorizer.pkl')
-        components['label_encoder'] = joblib.load(MODEL_DIR / 'label_encoder.pkl')
-        with open(MODEL_DIR / 'model_meta.json') as f:
+        components['ml_model']      = joblib.load(MODEL_DIR / 'resume_model_v2.pkl')
+        components['tfidf']         = joblib.load(MODEL_DIR / 'tfidf_vectorizer_v2.pkl')
+        components['label_encoder'] = joblib.load(MODEL_DIR / 'label_encoder_v2.pkl')
+        with open(MODEL_DIR / 'model_meta_v2.json') as f:
             components['meta'] = json.load(f)
         components['mode'] = 'ml'
         print(f"  ML model loaded: {components['meta'].get('best_model_name', 'Unknown')}")

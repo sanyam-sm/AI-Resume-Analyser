@@ -1,7 +1,14 @@
 """
 app.py — AI Resume Analyzer Flask Backend
-ML domain classifier (TF-IDF) + Gemini-powered entity extraction.
-Course recommendations via YouTube Data API v3 (free) with curated fallback.
+
+Extraction pipeline (3-tier):
+  1. BERT NER (yashpwr/resume-ner-bert-v2) — Primary, Deep Learning
+  2. Gemini 2.0 Flash API                  — Fallback if BERT unavailable
+  3. Regex                                 — Last resort, no API key needed
+
+Classification:
+  XGBoost + TF-IDF (v2.0) — 52 categories, 84% accuracy, 11,446 training samples
+  Keyword fallback when ML confidence < 50%
 """
 
 import os
@@ -12,7 +19,7 @@ import uuid
 import requests
 from pathlib import Path
 
-# ─── Load .env file (so you never have to set keys manually in terminal) ───────
+# ─── Load .env ────────────────────────────────────────────────────────────────
 def _load_env(env_path='.env'):
     try:
         with open(env_path) as f:
@@ -26,7 +33,7 @@ def _load_env(env_path='.env'):
                     os.environ.setdefault(key, value)
         print("  .env loaded ✓")
     except FileNotFoundError:
-        pass  # No .env file — fall back to system environment variables
+        pass
 
 _load_env()
 
@@ -38,7 +45,7 @@ from utils.parser import (
     extract_text_from_pdf, clean_text, extract_email,
     extract_phone, extract_name, count_pages,
     score_resume, detect_experience_level,
-    extract_resume_with_gemini,           # ← Gemini-powered extraction
+    ResumeNERExtractor, extract_resume_with_gemini,
     compute_job_matches, compute_skill_gaps,
     get_project_ideas,
     extract_skills_by_keyword, merge_skills,
@@ -46,7 +53,7 @@ from utils.parser import (
 
 # ─── App Setup ────────────────────────────────────────────────────────────────
 app = Flask(__name__, template_folder='templates', static_folder='static')
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024   # 10 MB upload limit
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 app.config['UPLOAD_FOLDER']      = Path('uploads')
 app.config['UPLOAD_FOLDER'].mkdir(exist_ok=True)
 
@@ -56,16 +63,9 @@ MODEL_DIR       = Path(r'notebooks\models')
 
 
 def load_models():
-    """
-    Load ML models at startup.
-    BERT NER removed — replaced by Gemini API extraction (faster, more accurate).
-    """
     components = {
-        'ml_model'     : None,
-        'tfidf'        : None,
-        'label_encoder': None,
-        'meta'         : {},
-        'mode'         : 'none',
+        'ml_model': None, 'tfidf': None, 'label_encoder': None,
+        'meta': {}, 'ner_extractor': None, 'mode': 'none',
     }
     try:
         components['ml_model']      = joblib.load(MODEL_DIR / 'resume_model_v2.pkl')
@@ -76,17 +76,31 @@ def load_models():
         components['mode'] = 'ml'
         print(f"  ML model loaded: {components['meta'].get('best_model_name', 'Unknown')}")
     except FileNotFoundError as e:
-        print(f"  ML model not found: {e}\n  → Run the training notebook first.")
+        print(f"  ML model not found: {e}")
     except Exception as e:
-        print(f"  ML model failed to load: {e}\n  → Likely a scikit-learn version mismatch.")
+        print(f"  ML model failed: {e}")
+
+    # ── BERT NER: Primary DL extractor ────────────────────────────────────────
+    try:
+        components['ner_extractor'] = ResumeNERExtractor()
+    except Exception as e:
+        print(f"  BERT NER unavailable: {e}")
+        if os.environ.get('GEMINI_API_KEY'):
+            print("  → Will use Gemini API as extraction fallback")
+        else:
+            print("  → Will use regex as extraction fallback")
+
     return components
 
 
 print("Loading models...")
 models = load_models()
-print(f"Ready!  Mode: {models['mode']}")
-print(f"  YouTube API : {'configured ✓' if YOUTUBE_API_KEY                      else 'not set — using curated fallback'}")
-print(f"  Gemini API  : {'configured ✓' if os.environ.get('GEMINI_API_KEY') else 'not set — using regex fallback'}")
+ner_mode = ('BERT' if models['ner_extractor']
+            else 'Gemini' if os.environ.get('GEMINI_API_KEY')
+            else 'Regex')
+print(f"Ready!  ML: {models['mode']} | Extraction: {ner_mode}")
+print(f"  YouTube API : {'configured ✓' if YOUTUBE_API_KEY else 'not set'}")
+print(f"  Gemini API  : {'configured ✓' if os.environ.get('GEMINI_API_KEY') else 'not set'}")
 
 
 def allowed_file(filename):
@@ -96,44 +110,44 @@ def allowed_file(filename):
 # ─── Course Recommendations ───────────────────────────────────────────────────
 
 _SKILL_COURSES = {
-    'python'            : {'name': 'Python for Everybody (Coursera)',           'url': 'https://www.coursera.org/specializations/python'},
-    'django'            : {'name': 'Django Full Course (freeCodeCamp)',          'url': 'https://www.youtube.com/watch?v=F5mRW0jo-U4'},
-    'flask'             : {'name': 'Flask Tutorial (Tech With Tim)',             'url': 'https://www.youtube.com/watch?v=Z1RJmh_OqeA'},
-    'machine learning'  : {'name': 'ML Specialization (Coursera - Andrew Ng)',  'url': 'https://www.coursera.org/specializations/machine-learning-introduction'},
-    'deep learning'     : {'name': 'Deep Learning Specialization (Coursera)',   'url': 'https://www.coursera.org/specializations/deep-learning'},
-    'pytorch'           : {'name': 'PyTorch Full Course (freeCodeCamp)',         'url': 'https://www.youtube.com/watch?v=Z_ikDlimN6A'},
-    'tensorflow'        : {'name': 'TensorFlow 2.0 Full Course (YouTube)',      'url': 'https://www.youtube.com/watch?v=tPYj3fFJGjk'},
-    'nlp'               : {'name': 'NLP with Python (Udemy)',                   'url': 'https://www.udemy.com/course/nlp-natural-language-processing-with-python/'},
-    'data analysis'     : {'name': 'Data Analysis with Python (freeCodeCamp)', 'url': 'https://www.youtube.com/watch?v=r-uOLxNrNk8'},
-    'statistics'        : {'name': 'Statistics for Data Science (YouTube)',     'url': 'https://www.youtube.com/watch?v=xxpc-HPKN28'},
-    'big data'          : {'name': 'Big Data Specialization (Coursera)',        'url': 'https://www.coursera.org/specializations/big-data'},
-    'hadoop'            : {'name': 'Hadoop Tutorial for Beginners (YouTube)',   'url': 'https://www.youtube.com/watch?v=1vbXmCrkT3Y'},
-    'spark'             : {'name': 'Apache Spark Full Course (YouTube)',        'url': 'https://www.youtube.com/watch?v=S2MUhGA3lEw'},
-    'sql'               : {'name': 'SQL Full Course (freeCodeCamp)',            'url': 'https://www.youtube.com/watch?v=HXV3zeQKqGY'},
-    'mongodb'           : {'name': 'MongoDB Full Course (YouTube)',             'url': 'https://www.youtube.com/watch?v=ofme2o29ngU'},
-    'postgresql'        : {'name': 'PostgreSQL Tutorial (YouTube)',             'url': 'https://www.youtube.com/watch?v=qw--VYLpxG4'},
-    'aws'               : {'name': 'AWS Cloud Practitioner (freeCodeCamp)',     'url': 'https://www.youtube.com/watch?v=SOTamWNgDKc'},
-    'docker'            : {'name': 'Docker Full Course (TechWorld YouTube)',    'url': 'https://www.youtube.com/watch?v=3c-iBn73dDE'},
-    'kubernetes'        : {'name': 'Kubernetes Full Course (YouTube)',          'url': 'https://www.youtube.com/watch?v=X48VuDVv0do'},
-    'ci/cd'             : {'name': 'CI/CD Pipeline Tutorial (YouTube)',         'url': 'https://www.youtube.com/watch?v=R8_veQiYBjI'},
-    'mlflow'            : {'name': 'MLflow Tutorial (YouTube)',                 'url': 'https://www.youtube.com/watch?v=AxYmj8ufKKY'},
-    'react'             : {'name': 'React Full Course (freeCodeCamp)',          'url': 'https://www.youtube.com/watch?v=bMknfKXIFA8'},
-    'javascript'        : {'name': 'JavaScript Full Course (freeCodeCamp)',     'url': 'https://www.youtube.com/watch?v=jS4aFq5-91M'},
-    'node.js'           : {'name': 'Node.js Full Course (YouTube)',             'url': 'https://www.youtube.com/watch?v=Oe421EPjeBE'},
-    'rest api'          : {'name': 'REST API Full Course (YouTube)',            'url': 'https://www.youtube.com/watch?v=-MTSQjw5DrM'},
-    'tableau'           : {'name': 'Tableau Full Course (YouTube)',             'url': 'https://www.youtube.com/watch?v=TPMlZxRRaBQ'},
-    'power bi'          : {'name': 'Power BI Full Course (YouTube)',            'url': 'https://www.youtube.com/watch?v=fnA454Gbkak'},
-    'data visualization': {'name': 'Data Visualization with Python (YouTube)', 'url': 'https://www.youtube.com/watch?v=a9UrKTVEeZA'},
-    'excel'             : {'name': 'Excel Full Course (freeCodeCamp)',          'url': 'https://www.youtube.com/watch?v=Vl0H-qTclOg'},
-    'r'                 : {'name': 'R Programming Full Course (YouTube)',       'url': 'https://www.youtube.com/watch?v=_V8eKsto3Ug'},
-    'java'              : {'name': 'Java Full Course (freeCodeCamp)',           'url': 'https://www.youtube.com/watch?v=grEKMHGYyns'},
-    'spring boot'       : {'name': 'Spring Boot Full Course (YouTube)',         'url': 'https://www.youtube.com/watch?v=9SGDpanrc8U'},
-    'kafka'             : {'name': 'Apache Kafka Full Course (YouTube)',        'url': 'https://www.youtube.com/watch?v=B5j3uNBH8X4'},
-    'redis'             : {'name': 'Redis Full Course (YouTube)',               'url': 'https://www.youtube.com/watch?v=jgpVdJB2sKQ'},
-    'terraform'         : {'name': 'Terraform Full Course (YouTube)',           'url': 'https://www.youtube.com/watch?v=SLB_c_ayRMo'},
-    'git'               : {'name': 'Git & GitHub Full Course (freeCodeCamp)',  'url': 'https://www.youtube.com/watch?v=RGOj5yH7evk'},
-    'transformers'      : {'name': 'Hugging Face Transformers Course (Free)',   'url': 'https://huggingface.co/learn/nlp-course/chapter1/1'},
-    'hugging face'      : {'name': 'Hugging Face NLP Course (Free)',            'url': 'https://huggingface.co/learn/nlp-course/chapter1/1'},
+    'python'            : {'name': 'Python for Everybody (Coursera)',          'url': 'https://www.coursera.org/specializations/python'},
+    'django'            : {'name': 'Django Full Course (freeCodeCamp)',         'url': 'https://www.youtube.com/watch?v=F5mRW0jo-U4'},
+    'flask'             : {'name': 'Flask Tutorial (Tech With Tim)',            'url': 'https://www.youtube.com/watch?v=Z1RJmh_OqeA'},
+    'machine learning'  : {'name': 'ML Specialization (Coursera - Andrew Ng)', 'url': 'https://www.coursera.org/specializations/machine-learning-introduction'},
+    'deep learning'     : {'name': 'Deep Learning Specialization (Coursera)',  'url': 'https://www.coursera.org/specializations/deep-learning'},
+    'pytorch'           : {'name': 'PyTorch Full Course (freeCodeCamp)',        'url': 'https://www.youtube.com/watch?v=Z_ikDlimN6A'},
+    'tensorflow'        : {'name': 'TensorFlow 2.0 Full Course (YouTube)',     'url': 'https://www.youtube.com/watch?v=tPYj3fFJGjk'},
+    'nlp'               : {'name': 'NLP with Python (Udemy)',                  'url': 'https://www.udemy.com/course/nlp-natural-language-processing-with-python/'},
+    'data analysis'     : {'name': 'Data Analysis with Python (freeCodeCamp)','url': 'https://www.youtube.com/watch?v=r-uOLxNrNk8'},
+    'statistics'        : {'name': 'Statistics for Data Science (YouTube)',    'url': 'https://www.youtube.com/watch?v=xxpc-HPKN28'},
+    'big data'          : {'name': 'Big Data Specialization (Coursera)',       'url': 'https://www.coursera.org/specializations/big-data'},
+    'hadoop'            : {'name': 'Hadoop Tutorial for Beginners (YouTube)',  'url': 'https://www.youtube.com/watch?v=1vbXmCrkT3Y'},
+    'spark'             : {'name': 'Apache Spark Full Course (YouTube)',       'url': 'https://www.youtube.com/watch?v=S2MUhGA3lEw'},
+    'sql'               : {'name': 'SQL Full Course (freeCodeCamp)',           'url': 'https://www.youtube.com/watch?v=HXV3zeQKqGY'},
+    'mongodb'           : {'name': 'MongoDB Full Course (YouTube)',            'url': 'https://www.youtube.com/watch?v=ofme2o29ngU'},
+    'postgresql'        : {'name': 'PostgreSQL Tutorial (YouTube)',            'url': 'https://www.youtube.com/watch?v=qw--VYLpxG4'},
+    'aws'               : {'name': 'AWS Cloud Practitioner (freeCodeCamp)',    'url': 'https://www.youtube.com/watch?v=SOTamWNgDKc'},
+    'docker'            : {'name': 'Docker Full Course (TechWorld YouTube)',   'url': 'https://www.youtube.com/watch?v=3c-iBn73dDE'},
+    'kubernetes'        : {'name': 'Kubernetes Full Course (YouTube)',         'url': 'https://www.youtube.com/watch?v=X48VuDVv0do'},
+    'ci/cd'             : {'name': 'CI/CD Pipeline Tutorial (YouTube)',        'url': 'https://www.youtube.com/watch?v=R8_veQiYBjI'},
+    'mlflow'            : {'name': 'MLflow Tutorial (YouTube)',                'url': 'https://www.youtube.com/watch?v=AxYmj8ufKKY'},
+    'react'             : {'name': 'React Full Course (freeCodeCamp)',         'url': 'https://www.youtube.com/watch?v=bMknfKXIFA8'},
+    'javascript'        : {'name': 'JavaScript Full Course (freeCodeCamp)',    'url': 'https://www.youtube.com/watch?v=jS4aFq5-91M'},
+    'node.js'           : {'name': 'Node.js Full Course (YouTube)',            'url': 'https://www.youtube.com/watch?v=Oe421EPjeBE'},
+    'rest api'          : {'name': 'REST API Full Course (YouTube)',           'url': 'https://www.youtube.com/watch?v=-MTSQjw5DrM'},
+    'tableau'           : {'name': 'Tableau Full Course (YouTube)',            'url': 'https://www.youtube.com/watch?v=TPMlZxRRaBQ'},
+    'power bi'          : {'name': 'Power BI Full Course (YouTube)',           'url': 'https://www.youtube.com/watch?v=fnA454Gbkak'},
+    'data visualization': {'name': 'Data Visualization with Python (YouTube)','url': 'https://www.youtube.com/watch?v=a9UrKTVEeZA'},
+    'excel'             : {'name': 'Excel Full Course (freeCodeCamp)',         'url': 'https://www.youtube.com/watch?v=Vl0H-qTclOg'},
+    'r'                 : {'name': 'R Programming Full Course (YouTube)',      'url': 'https://www.youtube.com/watch?v=_V8eKsto3Ug'},
+    'java'              : {'name': 'Java Full Course (freeCodeCamp)',          'url': 'https://www.youtube.com/watch?v=grEKMHGYyns'},
+    'spring boot'       : {'name': 'Spring Boot Full Course (YouTube)',        'url': 'https://www.youtube.com/watch?v=9SGDpanrc8U'},
+    'kafka'             : {'name': 'Apache Kafka Full Course (YouTube)',       'url': 'https://www.youtube.com/watch?v=B5j3uNBH8X4'},
+    'redis'             : {'name': 'Redis Full Course (YouTube)',              'url': 'https://www.youtube.com/watch?v=jgpVdJB2sKQ'},
+    'terraform'         : {'name': 'Terraform Full Course (YouTube)',          'url': 'https://www.youtube.com/watch?v=SLB_c_ayRMo'},
+    'git'               : {'name': 'Git & GitHub Full Course (freeCodeCamp)', 'url': 'https://www.youtube.com/watch?v=RGOj5yH7evk'},
+    'transformers'      : {'name': 'Hugging Face Transformers Course (Free)',  'url': 'https://huggingface.co/learn/nlp-course/chapter1/1'},
+    'hugging face'      : {'name': 'Hugging Face NLP Course (Free)',           'url': 'https://huggingface.co/learn/nlp-course/chapter1/1'},
 }
 
 _DOMAIN_COURSES = {
@@ -183,14 +197,13 @@ def _fetch_from_youtube(missing_skills, predicted_category, max_courses):
                     'url'      : f"https://www.youtube.com/watch?v={vid_id}",
                     'thumbnail': snippet.get('thumbnails', {}).get('medium', {}).get('url', ''),
                     'channel'  : snippet.get('channelTitle', ''),
-                    'reason'   : f"Fills gap: {skill_name}",
-                    'source'   : 'YouTube',
+                    'reason'   : f"Fills gap: {skill_name}", 'source': 'YouTube',
                 })
         except requests.exceptions.RequestException:
             break
     if len(courses) < max_courses:
-        fallback = _curated_fallback(missing_skills, predicted_category, max_courses - len(courses))
-        existing = {c['name'] for c in courses}
+        fallback  = _curated_fallback(missing_skills, predicted_category, max_courses - len(courses))
+        existing  = {c['name'] for c in courses}
         for c in fallback:
             if c['name'] not in existing:
                 courses.append(c)
@@ -220,26 +233,97 @@ def _curated_fallback(missing_skills, predicted_category, max_courses):
     return courses[:max_courses]
 
 
-# ─── ML Prediction Helper ─────────────────────────────────────────────────────
+# ─── ML Prediction + Keyword Fallback ────────────────────────────────────────
 
-def _predict_domain(tfidf_vec):
-    """Run ML domain classifier and return category + top 5 predictions."""
+_CATEGORY_KEYWORDS = {
+    'Data Science'             : ['machine learning', 'deep learning', 'nlp', 'tensorflow',
+                                  'pytorch', 'data science', 'neural network', 'pandas',
+                                  'scikit', 'xgboost', 'lightgbm', 'pyspark', 'mlflow',
+                                  'airflow', 'data pipeline', 'model training', 'jupyter',
+                                  'numpy', 'matplotlib', 'data preprocessing',
+                                  'feature engineering', 'ml model', 'generative ai',
+                                  'classification', 'regression', 'power bi'],
+    'Full Stack Developer'     : ['full stack', 'fullstack', 'react', 'node.js', 'express',
+                                  'mongodb', 'rest api', 'angular', 'vue', 'next.js'],
+    'Python Developer'         : ['python developer', 'django', 'flask', 'fastapi', 'celery'],
+    'Java Developer'           : ['java developer', 'spring boot', 'spring mvc', 'hibernate', 'maven'],
+    'React Developer'          : ['react developer', 'redux', 'typescript', 'webpack', 'frontend developer'],
+    'DevOps Engineer'          : ['devops', 'kubernetes', 'ci/cd', 'terraform', 'ansible', 'jenkins', 'helm'],
+    'Web Designing'            : ['web designer', 'ui designer', 'ux designer', 'figma', 'adobe xd', 'web design'],
+    'Database'                 : ['dba', 'database administrator', 'oracle dba', 'sql server dba'],
+    'Network Security Engineer': ['network security', 'cybersecurity', 'penetration testing', 'siem', 'ethical hacking'],
+    'Testing'                  : ['test engineer', 'qa engineer', 'selenium', 'automation testing', 'quality assurance'],
+    'Business Analyst'         : ['business analyst', 'requirements gathering', 'stakeholder management', 'user stories'],
+    'DotNet Developer'         : ['asp.net', 'dotnet', '.net developer', 'c# developer', 'entity framework'],
+    'SAP Developer'            : ['sap abap', 'sap hana', 'sap fiori', 'sap developer'],
+    'Blockchain'               : ['blockchain developer', 'solidity', 'ethereum', 'smart contract', 'web3'],
+    'ETL Developer'            : ['etl developer', 'data warehouse', 'informatica', 'talend', 'ssis'],
+    'Hadoop'                   : ['hadoop developer', 'hive', 'hbase', 'mapreduce', 'hdfs'],
+    'Information Technology'   : ['it support', 'system administrator', 'help desk', 'active directory', 'itil'],
+    'HR'                       : ['human resources', 'recruitment', 'talent acquisition', 'hr manager', 'payroll'],
+    'Sales'                    : ['sales manager', 'business development', 'sales executive', 'crm', 'lead generation'],
+    'Finance'                  : ['financial analyst', 'investment banker', 'chartered accountant', 'cfa', 'balance sheet'],
+    'Aviation'                 : ['pilot', 'aircraft', 'aviation', 'atpl', 'cpl', 'iata', 'icao', 'cockpit'],
+    'Management'               : ['general manager', 'senior manager', 'vice president', 'coo', 'ceo', 'strategic planning'],
+    'Architecture'             : ['revit', 'autocad architect', 'interior design', 'urban planning', 'bim'],
+    'Civil Engineer'           : ['civil engineer', 'structural engineer', 'rcc', 'staad pro'],
+    'Mechanical Engineer'      : ['mechanical engineer', 'solidworks', 'catia', 'ansys'],
+    'PMO'                      : ['project manager', 'pmo', 'prince2', 'pmp', 'scrum master'],
+    'BPO'                      : ['bpo', 'call center', 'customer service', 'voice process'],
+}
+
+CONFIDENCE_THRESHOLD = 50.0
+
+
+def _keyword_predict(raw_text: str) -> str:
+    """Score resume text against category keywords — low-confidence fallback."""
+    text_lower = raw_text.lower()
+    scores = {}
+    for category, keywords in _CATEGORY_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in text_lower)
+        if score > 0:
+            scores[category] = score
+    return max(scores, key=scores.get) if scores else None
+
+
+def _predict_domain(tfidf_vec, raw_text: str = ''):
+    """
+    ML classification with keyword fallback when confidence < threshold.
+    Handles both XGBoost (predict_proba) and LinearSVC (decision_function).
+    """
     ml_model = models['ml_model']
     le       = models['label_encoder']
-    pred_id  = ml_model.predict(tfidf_vec)[0]
+
+    pred_id            = ml_model.predict(tfidf_vec)[0]
     predicted_category = le.classes_[pred_id]
+
     try:
         proba = ml_model.predict_proba(tfidf_vec)[0]
     except AttributeError:
-        # LinearSVC doesn't have predict_proba — use softmax on decision function
         raw   = ml_model.decision_function(tfidf_vec)[0]
         e_x   = np.exp(raw - np.max(raw))
         proba = e_x / e_x.sum()
+
     top_ids = np.argsort(proba)[::-1][:5]
     top_predictions = [
         {'label': le.classes_[i], 'confidence': round(float(proba[i]) * 100, 1)}
         for i in top_ids
     ]
+
+    top_confidence = top_predictions[0]['confidence']
+
+    # ── Keyword override when model is uncertain ──────────────────────────────
+    if top_confidence < CONFIDENCE_THRESHOLD and raw_text:
+        keyword_cat = _keyword_predict(raw_text)
+        if keyword_cat and keyword_cat != predicted_category:
+            print(f"  ⚠ Low ML confidence ({top_confidence:.1f}%) → keyword override: {keyword_cat}")
+            predicted_category = keyword_cat
+            exists = next((p for p in top_predictions if p['label'] == keyword_cat), None)
+            if exists:
+                top_predictions = [exists] + [p for p in top_predictions if p['label'] != keyword_cat]
+            else:
+                top_predictions = [{'label': keyword_cat, 'confidence': top_confidence}] + top_predictions[:4]
+
     return predicted_category, top_predictions
 
 
@@ -262,8 +346,8 @@ def api_model_info():
         'accuracy'     : round(meta.get('accuracy',    0) * 100, 2),
         'f1_weighted'  : round(meta.get('f1_weighted', 0) * 100, 2),
         'f1_macro'     : round(meta.get('f1_macro',    0) * 100, 2),
-        'ner_model'    : 'Gemini 2.0 Flash (entity extraction)',
-        'ner_available': bool(os.environ.get('GEMINI_API_KEY')),
+        'ner_model'    : 'yashpwr/resume-ner-bert-v2' if models['ner_extractor'] else 'Gemini 2.0 Flash',
+        'ner_available': models['ner_extractor'] is not None,
         'num_classes'  : meta.get('num_classes',    0),
         'classes'      : meta.get('classes',       []),
         'train_samples': meta.get('train_samples', 0),
@@ -276,9 +360,6 @@ def api_model_info():
 
 @app.route('/api/analyze', methods=['POST'])
 def api_analyze():
-    """Main endpoint — accepts PDF resume, returns full structured analysis."""
-
-    # ── Validate request ──────────────────────────────────────────────────────
     if 'resume' not in request.files:
         return jsonify({'status': 'error', 'message': 'No file provided.'}), 400
     file = request.files['resume']
@@ -287,45 +368,43 @@ def api_analyze():
     if models['mode'] == 'none':
         return jsonify({'status': 'error', 'message': 'ML model not loaded. Run the training notebook first.'}), 503
 
-    # Random filename prevents collisions and path-traversal attacks
     tmp_path = app.config['UPLOAD_FOLDER'] / f"{uuid.uuid4().hex}.pdf"
 
     try:
         file.save(tmp_path)
-
-        # ── Extract text from PDF ─────────────────────────────────────────
         raw_text = extract_text_from_pdf(str(tmp_path))
         if not raw_text.strip():
-            return jsonify({
-                'status' : 'error',
-                'message': 'Could not extract text. Ensure the PDF is not a scanned image.',
-            }), 422
+            return jsonify({'status': 'error', 'message': 'Could not extract text. Ensure the PDF is not a scanned image.'}), 422
 
         pages      = count_pages(str(tmp_path))
         word_count = len(raw_text.split())
 
-        # ── Gemini Extraction ─────────────────────────────────────────────
-        # Replaces old BERT NER — handles any layout, much more accurate
-        print("  Running Gemini extraction...")
-        ner_results = extract_resume_with_gemini(raw_text)
+        # ── Entity Extraction: BERT → Gemini → Regex ──────────────────────────
+        if models['ner_extractor']:
+            print("  Running BERT NER extraction...")
+            try:
+                ner_results = models['ner_extractor'].extract(raw_text[:4000])
+            except Exception as e:
+                print(f"  BERT NER error: {e} — falling back to Gemini/regex")
+                ner_results = extract_resume_with_gemini(raw_text)
+        else:
+            ner_results = extract_resume_with_gemini(raw_text)
 
         name  = ner_results.get('name',  '') or extract_name(raw_text)
         email = ner_results.get('email', '') or extract_email(raw_text)
         phone = ner_results.get('phone', '') or extract_phone(raw_text)
 
-        # ── Skill Extraction: Gemini + keyword scan merged ────────────────
-        # Gemini gives contextually extracted skills, keyword scan catches
-        # any technical tools Gemini might have missed from the full text.
-        gemini_skills       = ner_results.get('skills', [])
+        # ── Skills: NER/Gemini + keyword merge ────────────────────────────────
+        ner_skill_items     = ner_results.get('skills', [])
         keyword_skill_items = extract_skills_by_keyword(raw_text)
-        skill_items         = merge_skills(gemini_skills, keyword_skill_items)
+        skill_items         = merge_skills(ner_skill_items, keyword_skill_items)
 
-        # ── Domain Classification ─────────────────────────────────────────
+        # ── Domain Classification ─────────────────────────────────────────────
         cleaned                             = clean_text(raw_text)
         tfidf_vec                           = models['tfidf'].transform([cleaned])
-        predicted_category, top_predictions = _predict_domain(tfidf_vec)
+        predicted_category, top_predictions = _predict_domain(tfidf_vec, raw_text)
 
-        # ── Experience Level ──────────────────────────────────────────────
+        # ── Experience Level ──────────────────────────────────────────────────
         level   = detect_experience_level(raw_text, pages)
         ner_exp = ner_results.get('years_of_experience', '')
         if ner_exp:
@@ -334,14 +413,12 @@ def api_analyze():
                 yrs   = max(int(y) for y in exp_nums)
                 level = 'Senior' if yrs >= 5 else 'Mid-Level' if yrs >= 2 else 'Junior'
 
-        # ── Job Matching + Skill Gaps ─────────────────────────────────────
-        # Pass predicted_category so the category boost applies
+        # ── Job Matching + Skill Gaps ─────────────────────────────────────────
         job_matches = compute_job_matches(skill_items, top_n=5,
                                           predicted_category=predicted_category)
         skill_gaps  = compute_skill_gaps(skill_items,
                                          predicted_category=predicted_category)
 
-        # Build a deduplicated list of missing skills for course recommendations
         seen, unique_missing = set(), []
         for gap in skill_gaps:
             for s in gap.get('missing_core_skills', []) + gap.get('missing_skills', [])[:3]:
@@ -349,27 +426,23 @@ def api_analyze():
                     unique_missing.append(s)
                     seen.add(s)
 
-        # ── Projects + Courses ────────────────────────────────────────────
+        # ── Projects + Courses ────────────────────────────────────────────────
         project_ideas = get_project_ideas(skill_items, max_projects=4,
                                           experience_level=level)
-        courses       = get_courses_for_gaps(unique_missing, predicted_category,
-                                             max_courses=6)
+        courses       = get_courses_for_gaps(unique_missing, predicted_category, max_courses=6)
 
-        # ── Resume Score ──────────────────────────────────────────────────
+        # ── Resume Score ──────────────────────────────────────────────────────
         scoring = score_resume(raw_text)
 
-        # ── PDF preview (base64 encoded for inline browser rendering) ─────
+        # ── PDF preview ───────────────────────────────────────────────────────
         with open(tmp_path, 'rb') as f:
             pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
 
         return jsonify({
             'status'   : 'success',
             'extracted': {
-                'name'      : name,
-                'email'     : email,
-                'phone'     : phone,
-                'pages'     : pages,
-                'word_count': word_count,
+                'name': name, 'email': email, 'phone': phone,
+                'pages': pages, 'word_count': word_count,
             },
             'ner_entities': {
                 'experience_entries' : ner_results.get('experience_entries', []),
@@ -404,38 +477,31 @@ def api_analyze():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
     finally:
-        # Always delete the temp file — even if an error occurred
         if tmp_path.exists():
             tmp_path.unlink()
 
 
 @app.route('/api/demo')
 def api_demo():
-    """Demo endpoint — returns fake analysis without needing a real PDF."""
-    demo_courses = get_courses_for_gaps(
-        ['PyTorch', 'Big Data', 'Kubernetes', 'AWS'], 'Data Science', max_courses=4
-    )
+    demo_courses = get_courses_for_gaps(['PyTorch', 'Big Data', 'Kubernetes', 'AWS'], 'Data Science', max_courses=4)
     return jsonify({
         'status'   : 'success',
-        'extracted': {
-            'name': 'Alex Johnson', 'email': 'alex.johnson@email.com',
-            'phone': '+1-555-0192', 'pages': 2, 'word_count': 680,
-        },
+        'extracted': {'name': 'Alex Johnson', 'email': 'alex.johnson@email.com',
+                      'phone': '+1-555-0192', 'pages': 2, 'word_count': 680},
         'ner_entities': {
             'experience_entries': [
-                {'designation': 'Senior Data Scientist', 'company': 'Google',    'duration': 'Jan 2022 – Present', 'confidence': 0.97},
+                {'designation': 'Senior Data Scientist', 'company': 'Google',    'duration': 'Jan 2022 – Present',  'confidence': 0.97},
                 {'designation': 'Data Analyst',           'company': 'Microsoft', 'duration': 'Jun 2019 – Dec 2021', 'confidence': 0.95},
             ],
             'education_entries': [
                 {'degree': 'M.S. Computer Science', 'college': 'Stanford University', 'year': '2019', 'confidence': 0.98},
             ],
             'years_of_experience': '5 years',
-            'locations'          : [{'text': 'San Francisco, CA', 'confidence': 0.96}],
+            'locations': [{'text': 'San Francisco, CA', 'confidence': 0.96}],
         },
         'prediction': {
-            'category'        : 'Data Science',
-            'experience_level': 'Senior',
-            'top_predictions' : [
+            'category': 'Data Science', 'experience_level': 'Senior',
+            'top_predictions': [
                 {'label': 'Data Science',     'confidence': 89.4},
                 {'label': 'Python Developer', 'confidence':  5.8},
                 {'label': 'Business Analyst', 'confidence':  2.3},
@@ -445,8 +511,8 @@ def api_demo():
             'model_used': models['mode'],
         },
         'skills': {
-            'current': ['Python', 'Machine Learning', 'SQL', 'TensorFlow',
-                        'Data Analysis', 'Deep Learning', 'NLP', 'Docker', 'Git', 'Statistics'],
+            'current': ['Python', 'Machine Learning', 'SQL', 'TensorFlow', 'Data Analysis',
+                        'Deep Learning', 'NLP', 'Docker', 'Git', 'Statistics'],
             'current_with_confidence': [
                 {'text': 'Python',           'confidence': 0.98},
                 {'text': 'Machine Learning', 'confidence': 0.97},
@@ -461,46 +527,22 @@ def api_demo():
             ],
         },
         'job_matches': [
-            {
-                'role': 'Data Scientist', 'match_pct': 88.0,
-                'matched_skills'  : ['Python', 'Machine Learning', 'SQL', 'Statistics', 'Data Analysis', 'Deep Learning', 'TensorFlow', 'NLP'],
-                'missing_core'    : [],
-                'missing_preferred': ['PyTorch', 'Big Data', 'Data Visualization', 'R'],
-                'total_required'  : 12,
-            },
-            {
-                'role': 'ML Engineer', 'match_pct': 82.0,
-                'matched_skills'  : ['Python', 'Machine Learning', 'Docker', 'SQL', 'Git', 'Deep Learning', 'TensorFlow'],
-                'missing_core'    : [],
-                'missing_preferred': ['Kubernetes', 'AWS', 'PyTorch', 'CI/CD', 'MLflow'],
-                'total_required'  : 12,
-            },
+            {'role': 'Data Scientist', 'match_pct': 88.0,
+             'matched_skills': ['Python', 'Machine Learning', 'SQL', 'Statistics', 'Data Analysis', 'Deep Learning', 'TensorFlow', 'NLP'],
+             'missing_core': [], 'missing_preferred': ['PyTorch', 'Big Data', 'Data Visualization', 'R'], 'total_required': 12},
+            {'role': 'ML Engineer', 'match_pct': 82.0,
+             'matched_skills': ['Python', 'Machine Learning', 'Docker', 'SQL', 'Git', 'Deep Learning', 'TensorFlow'],
+             'missing_core': [], 'missing_preferred': ['Kubernetes', 'AWS', 'PyTorch', 'CI/CD', 'MLflow'], 'total_required': 12},
         ],
         'skill_gaps': [
-            {
-                'role': 'Data Scientist',
-                'missing_skills'     : ['PyTorch', 'Big Data', 'Data Visualization', 'R'],
-                'missing_core_skills': [],
-                'message'            : "You have all core skills for Data Scientist! Consider adding 'PyTorch', 'Big Data' to stand out.",
-            },
+            {'role': 'Data Scientist', 'missing_skills': ['PyTorch', 'Big Data', 'Data Visualization', 'R'],
+             'missing_core_skills': [], 'message': "You have all core skills for Data Scientist! Consider adding 'PyTorch', 'Big Data' to stand out."},
         ],
         'project_ideas': [
-            {
-                'name': 'Heart Disease Prediction',
-                'description': 'Build a classification model to predict heart disease from patient data using scikit-learn and deploy as a web app.',
-                'matched_skills': ['Python', 'Machine Learning', 'SQL'],
-                'all_skills'    : ['Python', 'Machine Learning', 'SQL', 'Flask'],
-                'difficulty'    : 'Intermediate',
-                'relevance'     : 100.0,
-            },
-            {
-                'name': 'Sentiment Analysis Dashboard',
-                'description': 'Build an NLP pipeline that analyzes social media sentiment and displays results on a live dashboard.',
-                'matched_skills': ['Python', 'NLP'],
-                'all_skills'    : ['Python', 'NLP', 'Flask', 'Data Visualization'],
-                'difficulty'    : 'Intermediate',
-                'relevance'     : 67.0,
-            },
+            {'name': 'Heart Disease Prediction', 'description': 'Build a classification model using scikit-learn and deploy as a web app.',
+             'matched_skills': ['Python', 'Machine Learning', 'SQL'], 'all_skills': ['Python', 'Machine Learning', 'SQL', 'Flask'], 'difficulty': 'Intermediate', 'relevance': 100.0},
+            {'name': 'Sentiment Analysis Dashboard', 'description': 'Build an NLP pipeline analyzing social media sentiment on a live dashboard.',
+             'matched_skills': ['Python', 'NLP'], 'all_skills': ['Python', 'NLP', 'Flask', 'Data Visualization'], 'difficulty': 'Intermediate', 'relevance': 67.0},
         ],
         'score': {
             'total': 71, 'max': 100,

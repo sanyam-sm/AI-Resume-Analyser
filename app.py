@@ -1,6 +1,6 @@
 """
 app.py — AI Resume Analyzer Flask Backend
-ML domain classifier (TF-IDF) + NER (yashpwr/resume-ner-bert-v2)
+ML domain classifier (TF-IDF) + Gemini-powered entity extraction.
 Course recommendations via YouTube Data API v3 (free) with curated fallback.
 """
 
@@ -38,27 +38,34 @@ from utils.parser import (
     extract_text_from_pdf, clean_text, extract_email,
     extract_phone, extract_name, count_pages,
     score_resume, detect_experience_level,
-    ResumeNERExtractor,
+    extract_resume_with_gemini,           # ← Gemini-powered extraction
     compute_job_matches, compute_skill_gaps,
     get_project_ideas,
-    extract_skills_by_keyword, merge_skills,   # ← NEW
+    extract_skills_by_keyword, merge_skills,
 )
 
 # ─── App Setup ────────────────────────────────────────────────────────────────
 app = Flask(__name__, template_folder='templates', static_folder='static')
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
-app.config['UPLOAD_FOLDER'] = Path('uploads')
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024   # 10 MB upload limit
+app.config['UPLOAD_FOLDER']      = Path('uploads')
 app.config['UPLOAD_FOLDER'].mkdir(exist_ok=True)
 
-ALLOWED = {'pdf'}
+ALLOWED         = {'pdf'}
 YOUTUBE_API_KEY = os.environ.get('YOUTUBE_API_KEY', '')
-MODEL_DIR = Path(r'notebooks\models')
+MODEL_DIR       = Path(r'notebooks\models')
 
 
 def load_models():
+    """
+    Load ML models at startup.
+    BERT NER removed — replaced by Gemini API extraction (faster, more accurate).
+    """
     components = {
-        'ml_model': None, 'tfidf': None, 'label_encoder': None,
-        'meta': {}, 'ner_extractor': None, 'mode': 'none',
+        'ml_model'     : None,
+        'tfidf'        : None,
+        'label_encoder': None,
+        'meta'         : {},
+        'mode'         : 'none',
     }
     try:
         components['ml_model']      = joblib.load(MODEL_DIR / 'resume_model_v2.pkl')
@@ -72,20 +79,14 @@ def load_models():
         print(f"  ML model not found: {e}\n  → Run the training notebook first.")
     except Exception as e:
         print(f"  ML model failed to load: {e}\n  → Likely a scikit-learn version mismatch.")
-
-    try:
-        components['ner_extractor'] = ResumeNERExtractor()
-        print("  NER extractor loaded: yashpwr/resume-ner-bert-v2")
-    except Exception as e:
-        print(f"  NER extractor not available: {e}\n  → Falling back to regex extraction.")
     return components
 
 
 print("Loading models...")
 models = load_models()
-print(f"Ready!  Mode: {models['mode']} | NER: {'yes' if models['ner_extractor'] else 'no (regex fallback)'}")
-print(f"  YouTube API: {'configured ✓' if YOUTUBE_API_KEY else 'not set — using curated fallback'}")
-print(f"  Gemini API:  {'configured ✓' if os.environ.get('GEMINI_API_KEY') else 'not set — using project idea fallback'}")
+print(f"Ready!  Mode: {models['mode']}")
+print(f"  YouTube API : {'configured ✓' if YOUTUBE_API_KEY                      else 'not set — using curated fallback'}")
+print(f"  Gemini API  : {'configured ✓' if os.environ.get('GEMINI_API_KEY') else 'not set — using regex fallback'}")
 
 
 def allowed_file(filename):
@@ -178,11 +179,12 @@ def _fetch_from_youtube(missing_skills, predicted_category, max_courses):
                 seen_ids.add(vid_id)
                 snippet = item['snippet']
                 courses.append({
-                    'name': snippet.get('title', query),
-                    'url': f"https://www.youtube.com/watch?v={vid_id}",
+                    'name'     : snippet.get('title', query),
+                    'url'      : f"https://www.youtube.com/watch?v={vid_id}",
                     'thumbnail': snippet.get('thumbnails', {}).get('medium', {}).get('url', ''),
-                    'channel': snippet.get('channelTitle', ''),
-                    'reason': f"Fills gap: {skill_name}", 'source': 'YouTube',
+                    'channel'  : snippet.get('channelTitle', ''),
+                    'reason'   : f"Fills gap: {skill_name}",
+                    'source'   : 'YouTube',
                 })
         except requests.exceptions.RequestException:
             break
@@ -221,15 +223,17 @@ def _curated_fallback(missing_skills, predicted_category, max_courses):
 # ─── ML Prediction Helper ─────────────────────────────────────────────────────
 
 def _predict_domain(tfidf_vec):
+    """Run ML domain classifier and return category + top 5 predictions."""
     ml_model = models['ml_model']
-    le = models['label_encoder']
-    pred_id = ml_model.predict(tfidf_vec)[0]
+    le       = models['label_encoder']
+    pred_id  = ml_model.predict(tfidf_vec)[0]
     predicted_category = le.classes_[pred_id]
     try:
         proba = ml_model.predict_proba(tfidf_vec)[0]
     except AttributeError:
-        raw = ml_model.decision_function(tfidf_vec)[0]
-        e_x = np.exp(raw - np.max(raw))
+        # LinearSVC doesn't have predict_proba — use softmax on decision function
+        raw   = ml_model.decision_function(tfidf_vec)[0]
+        e_x   = np.exp(raw - np.max(raw))
         proba = e_x / e_x.sum()
     top_ids = np.argsort(proba)[::-1][:5]
     top_predictions = [
@@ -252,21 +256,21 @@ def api_model_info():
     if not meta:
         return jsonify({'status': 'error', 'message': 'Models not loaded. Run the training notebook first.'}), 503
     return jsonify({
-        'status': 'ok',
+        'status'       : 'ok',
         'model_name'   : meta.get('best_model_name', 'Unknown'),
         'model_mode'   : models['mode'],
-        'accuracy'     : round(meta.get('accuracy', 0) * 100, 2),
+        'accuracy'     : round(meta.get('accuracy',    0) * 100, 2),
         'f1_weighted'  : round(meta.get('f1_weighted', 0) * 100, 2),
-        'f1_macro'     : round(meta.get('f1_macro', 0) * 100, 2),
-        'ner_model'    : meta.get('ner_model', 'yashpwr/resume-ner-bert-v2'),
-        'ner_available': models['ner_extractor'] is not None,
-        'num_classes'  : meta.get('num_classes', 0),
-        'classes'      : meta.get('classes', []),
+        'f1_macro'     : round(meta.get('f1_macro',    0) * 100, 2),
+        'ner_model'    : 'Gemini 2.0 Flash (entity extraction)',
+        'ner_available': bool(os.environ.get('GEMINI_API_KEY')),
+        'num_classes'  : meta.get('num_classes',    0),
+        'classes'      : meta.get('classes',       []),
         'train_samples': meta.get('train_samples', 0),
-        'test_samples' : meta.get('test_samples', 0),
+        'test_samples' : meta.get('test_samples',  0),
         'cv_mean'      : round(meta.get('cv_mean', 0) * 100, 2),
-        'cv_std'       : round(meta.get('cv_std', 0) * 100, 2),
-        'all_results'  : meta.get('all_results', {}),
+        'cv_std'       : round(meta.get('cv_std',  0) * 100, 2),
+        'all_results'  : meta.get('all_results',  {}),
     })
 
 
@@ -274,6 +278,7 @@ def api_model_info():
 def api_analyze():
     """Main endpoint — accepts PDF resume, returns full structured analysis."""
 
+    # ── Validate request ──────────────────────────────────────────────────────
     if 'resume' not in request.files:
         return jsonify({'status': 'error', 'message': 'No file provided.'}), 400
     file = request.files['resume']
@@ -282,43 +287,45 @@ def api_analyze():
     if models['mode'] == 'none':
         return jsonify({'status': 'error', 'message': 'ML model not loaded. Run the training notebook first.'}), 503
 
+    # Random filename prevents collisions and path-traversal attacks
     tmp_path = app.config['UPLOAD_FOLDER'] / f"{uuid.uuid4().hex}.pdf"
 
     try:
         file.save(tmp_path)
 
+        # ── Extract text from PDF ─────────────────────────────────────────
         raw_text = extract_text_from_pdf(str(tmp_path))
         if not raw_text.strip():
-            return jsonify({'status': 'error', 'message': 'Could not extract text. Ensure the PDF is not a scanned image.'}), 422
+            return jsonify({
+                'status' : 'error',
+                'message': 'Could not extract text. Ensure the PDF is not a scanned image.',
+            }), 422
 
         pages      = count_pages(str(tmp_path))
         word_count = len(raw_text.split())
 
-        # ── NER Extraction ────────────────────────────────────────────────────
-        ner_results = {}
-        if models['ner_extractor']:
-            try:
-                ner_results = models['ner_extractor'].extract(raw_text[:2000])
-            except Exception as e:
-                print(f"NER extraction error: {e} — using regex fallback")
+        # ── Gemini Extraction ─────────────────────────────────────────────
+        # Replaces old BERT NER — handles any layout, much more accurate
+        print("  Running Gemini extraction...")
+        ner_results = extract_resume_with_gemini(raw_text)
 
         name  = ner_results.get('name',  '') or extract_name(raw_text)
         email = ner_results.get('email', '') or extract_email(raw_text)
-        phone = ner_results.get('phone', '') or extract_phone(raw_text)  # regex handles +91 formats
+        phone = ner_results.get('phone', '') or extract_phone(raw_text)
 
-        # ── Skill Extraction: NER + keyword merge ─────────────────────────────
-        # NER alone misses/garbles many skills. Keyword scan reliably catches
-        # all explicitly listed technologies from the full resume text.
-        ner_skill_items     = ner_results.get('skills', [])
+        # ── Skill Extraction: Gemini + keyword scan merged ────────────────
+        # Gemini gives contextually extracted skills, keyword scan catches
+        # any technical tools Gemini might have missed from the full text.
+        gemini_skills       = ner_results.get('skills', [])
         keyword_skill_items = extract_skills_by_keyword(raw_text)
-        skill_items         = merge_skills(ner_skill_items, keyword_skill_items)
+        skill_items         = merge_skills(gemini_skills, keyword_skill_items)
 
-        # ── Domain Classification ─────────────────────────────────────────────
+        # ── Domain Classification ─────────────────────────────────────────
         cleaned                             = clean_text(raw_text)
         tfidf_vec                           = models['tfidf'].transform([cleaned])
         predicted_category, top_predictions = _predict_domain(tfidf_vec)
 
-        # ── Experience Level ──────────────────────────────────────────────────
+        # ── Experience Level ──────────────────────────────────────────────
         level   = detect_experience_level(raw_text, pages)
         ner_exp = ner_results.get('years_of_experience', '')
         if ner_exp:
@@ -327,10 +334,14 @@ def api_analyze():
                 yrs   = max(int(y) for y in exp_nums)
                 level = 'Senior' if yrs >= 5 else 'Mid-Level' if yrs >= 2 else 'Junior'
 
-        # ── Job Matching + Skill Gaps ─────────────────────────────────────────
-        job_matches = compute_job_matches(skill_items, top_n=5)
-        skill_gaps  = compute_skill_gaps(skill_items)
+        # ── Job Matching + Skill Gaps ─────────────────────────────────────
+        # Pass predicted_category so the category boost applies
+        job_matches = compute_job_matches(skill_items, top_n=5,
+                                          predicted_category=predicted_category)
+        skill_gaps  = compute_skill_gaps(skill_items,
+                                         predicted_category=predicted_category)
 
+        # Build a deduplicated list of missing skills for course recommendations
         seen, unique_missing = set(), []
         for gap in skill_gaps:
             for s in gap.get('missing_core_skills', []) + gap.get('missing_skills', [])[:3]:
@@ -338,34 +349,42 @@ def api_analyze():
                     unique_missing.append(s)
                     seen.add(s)
 
-        # ── Projects + Courses ────────────────────────────────────────────────
-        project_ideas = get_project_ideas(skill_items, max_projects=4)
-        courses       = get_courses_for_gaps(unique_missing, predicted_category, max_courses=6)
+        # ── Projects + Courses ────────────────────────────────────────────
+        project_ideas = get_project_ideas(skill_items, max_projects=4,
+                                          experience_level=level)
+        courses       = get_courses_for_gaps(unique_missing, predicted_category,
+                                             max_courses=6)
 
-        # ── Resume Score ──────────────────────────────────────────────────────
+        # ── Resume Score ──────────────────────────────────────────────────
         scoring = score_resume(raw_text)
 
-        # ── PDF preview ───────────────────────────────────────────────────────
+        # ── PDF preview (base64 encoded for inline browser rendering) ─────
         with open(tmp_path, 'rb') as f:
             pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
 
         return jsonify({
-            'status': 'success',
+            'status'   : 'success',
             'extracted': {
-                'name': name, 'email': email, 'phone': phone,
-                'pages': pages, 'word_count': word_count,
+                'name'      : name,
+                'email'     : email,
+                'phone'     : phone,
+                'pages'     : pages,
+                'word_count': word_count,
             },
             'ner_entities': {
-                # Structured experience: [{designation, company, duration}]
                 'experience_entries' : ner_results.get('experience_entries', []),
-                # Structured education: [{degree, college, year}]
-                'education_entries'  : ner_results.get('education_entries', []),
+                'education_entries'  : ner_results.get('education_entries',  []),
                 'years_of_experience': ner_results.get('years_of_experience', ''),
-                'locations'          : [e if isinstance(e, dict) else {'text': e} for e in ner_results.get('locations', [])],
+                'locations'          : [
+                    e if isinstance(e, dict) else {'text': e}
+                    for e in ner_results.get('locations', [])
+                ],
             },
             'prediction': {
-                'category': predicted_category, 'experience_level': level,
-                'top_predictions': top_predictions, 'model_used': models['mode'],
+                'category'        : predicted_category,
+                'experience_level': level,
+                'top_predictions' : top_predictions,
+                'model_used'      : models['mode'],
             },
             'skills': {
                 'current'                : [s['text'] if isinstance(s, dict) else s for s in skill_items],
@@ -385,69 +404,116 @@ def api_analyze():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
     finally:
+        # Always delete the temp file — even if an error occurred
         if tmp_path.exists():
             tmp_path.unlink()
 
 
 @app.route('/api/demo')
 def api_demo():
-    demo_courses = get_courses_for_gaps(['PyTorch', 'Big Data', 'Kubernetes', 'AWS'], 'Data Science', max_courses=4)
+    """Demo endpoint — returns fake analysis without needing a real PDF."""
+    demo_courses = get_courses_for_gaps(
+        ['PyTorch', 'Big Data', 'Kubernetes', 'AWS'], 'Data Science', max_courses=4
+    )
     return jsonify({
-        'status': 'success',
-        'extracted': {'name': 'Alex Johnson', 'email': 'alex.johnson@email.com', 'phone': '+1-555-0192', 'pages': 2, 'word_count': 680},
+        'status'   : 'success',
+        'extracted': {
+            'name': 'Alex Johnson', 'email': 'alex.johnson@email.com',
+            'phone': '+1-555-0192', 'pages': 2, 'word_count': 680,
+        },
         'ner_entities': {
-            'companies': [{'text': 'Google', 'confidence': 0.97}, {'text': 'Microsoft', 'confidence': 0.95}],
-            'designations': [{'text': 'Senior Data Scientist', 'confidence': 0.96}],
-            'degrees': [{'text': 'M.S. Computer Science', 'confidence': 0.98}],
-            'college_names': [{'text': 'Stanford University', 'confidence': 0.97}],
-            'graduation_years': [{'text': '2019', 'confidence': 0.95}],
+            'experience_entries': [
+                {'designation': 'Senior Data Scientist', 'company': 'Google',    'duration': 'Jan 2022 – Present', 'confidence': 0.97},
+                {'designation': 'Data Analyst',           'company': 'Microsoft', 'duration': 'Jun 2019 – Dec 2021', 'confidence': 0.95},
+            ],
+            'education_entries': [
+                {'degree': 'M.S. Computer Science', 'college': 'Stanford University', 'year': '2019', 'confidence': 0.98},
+            ],
             'years_of_experience': '5 years',
-            'locations': [{'text': 'San Francisco, CA', 'confidence': 0.96}],
+            'locations'          : [{'text': 'San Francisco, CA', 'confidence': 0.96}],
         },
         'prediction': {
-            'category': 'Data Science', 'experience_level': 'Senior',
-            'top_predictions': [
-                {'label': 'Data Science', 'confidence': 89.4},
-                {'label': 'Python Developer', 'confidence': 5.8},
-                {'label': 'Business Analyst', 'confidence': 2.3},
-                {'label': 'Database', 'confidence': 1.5},
-                {'label': 'Hadoop', 'confidence': 1.0},
+            'category'        : 'Data Science',
+            'experience_level': 'Senior',
+            'top_predictions' : [
+                {'label': 'Data Science',     'confidence': 89.4},
+                {'label': 'Python Developer', 'confidence':  5.8},
+                {'label': 'Business Analyst', 'confidence':  2.3},
+                {'label': 'Database',         'confidence':  1.5},
+                {'label': 'Hadoop',           'confidence':  1.0},
             ],
             'model_used': models['mode'],
         },
         'skills': {
-            'current': ['Python', 'Machine Learning', 'SQL', 'TensorFlow', 'Data Analysis', 'Deep Learning', 'NLP', 'Docker', 'Git', 'Statistics'],
+            'current': ['Python', 'Machine Learning', 'SQL', 'TensorFlow',
+                        'Data Analysis', 'Deep Learning', 'NLP', 'Docker', 'Git', 'Statistics'],
             'current_with_confidence': [
-                {'text': 'Python', 'confidence': 0.98}, {'text': 'Machine Learning', 'confidence': 0.97},
-                {'text': 'SQL', 'confidence': 0.96}, {'text': 'TensorFlow', 'confidence': 0.95},
-                {'text': 'Data Analysis', 'confidence': 0.94}, {'text': 'Deep Learning', 'confidence': 0.93},
-                {'text': 'NLP', 'confidence': 0.91}, {'text': 'Docker', 'confidence': 0.89},
-                {'text': 'Git', 'confidence': 0.88}, {'text': 'Statistics', 'confidence': 0.87},
+                {'text': 'Python',           'confidence': 0.98},
+                {'text': 'Machine Learning', 'confidence': 0.97},
+                {'text': 'SQL',              'confidence': 0.96},
+                {'text': 'TensorFlow',       'confidence': 0.95},
+                {'text': 'Data Analysis',    'confidence': 0.94},
+                {'text': 'Deep Learning',    'confidence': 0.93},
+                {'text': 'NLP',              'confidence': 0.91},
+                {'text': 'Docker',           'confidence': 0.89},
+                {'text': 'Git',              'confidence': 0.88},
+                {'text': 'Statistics',       'confidence': 0.87},
             ],
         },
         'job_matches': [
-            {'role': 'Data Scientist', 'match_pct': 88.0, 'matched_skills': ['Python', 'Machine Learning', 'SQL', 'Statistics', 'Data Analysis', 'Deep Learning', 'TensorFlow', 'NLP'], 'missing_core': [], 'missing_preferred': ['PyTorch', 'Big Data', 'Data Visualization', 'R'], 'total_required': 12},
-            {'role': 'ML Engineer', 'match_pct': 82.0, 'matched_skills': ['Python', 'Machine Learning', 'Docker', 'SQL', 'Git', 'Deep Learning', 'TensorFlow'], 'missing_core': [], 'missing_preferred': ['Kubernetes', 'AWS', 'PyTorch', 'CI/CD', 'MLflow'], 'total_required': 12},
+            {
+                'role': 'Data Scientist', 'match_pct': 88.0,
+                'matched_skills'  : ['Python', 'Machine Learning', 'SQL', 'Statistics', 'Data Analysis', 'Deep Learning', 'TensorFlow', 'NLP'],
+                'missing_core'    : [],
+                'missing_preferred': ['PyTorch', 'Big Data', 'Data Visualization', 'R'],
+                'total_required'  : 12,
+            },
+            {
+                'role': 'ML Engineer', 'match_pct': 82.0,
+                'matched_skills'  : ['Python', 'Machine Learning', 'Docker', 'SQL', 'Git', 'Deep Learning', 'TensorFlow'],
+                'missing_core'    : [],
+                'missing_preferred': ['Kubernetes', 'AWS', 'PyTorch', 'CI/CD', 'MLflow'],
+                'total_required'  : 12,
+            },
         ],
         'skill_gaps': [
-            {'role': 'Data Scientist', 'missing_skills': ['PyTorch', 'Big Data', 'Data Visualization', 'R'], 'missing_core_skills': [], 'message': "You have all core skills for Data Scientist! Consider adding 'PyTorch', 'Big Data' to stand out."},
+            {
+                'role': 'Data Scientist',
+                'missing_skills'     : ['PyTorch', 'Big Data', 'Data Visualization', 'R'],
+                'missing_core_skills': [],
+                'message'            : "You have all core skills for Data Scientist! Consider adding 'PyTorch', 'Big Data' to stand out.",
+            },
         ],
         'project_ideas': [
-            {'name': 'Heart Disease Prediction', 'description': 'Build a classification model to predict heart disease from patient data using scikit-learn and deploy as a web app.', 'matched_skills': ['Python', 'Machine Learning', 'SQL'], 'difficulty': 'Intermediate', 'relevance': 100.0},
-            {'name': 'Sentiment Analysis Dashboard', 'description': 'Build an NLP pipeline that analyzes social media sentiment and displays results on a live dashboard.', 'matched_skills': ['Python', 'NLP'], 'difficulty': 'Intermediate', 'relevance': 67.0},
+            {
+                'name': 'Heart Disease Prediction',
+                'description': 'Build a classification model to predict heart disease from patient data using scikit-learn and deploy as a web app.',
+                'matched_skills': ['Python', 'Machine Learning', 'SQL'],
+                'all_skills'    : ['Python', 'Machine Learning', 'SQL', 'Flask'],
+                'difficulty'    : 'Intermediate',
+                'relevance'     : 100.0,
+            },
+            {
+                'name': 'Sentiment Analysis Dashboard',
+                'description': 'Build an NLP pipeline that analyzes social media sentiment and displays results on a live dashboard.',
+                'matched_skills': ['Python', 'NLP'],
+                'all_skills'    : ['Python', 'NLP', 'Flask', 'Data Visualization'],
+                'difficulty'    : 'Intermediate',
+                'relevance'     : 67.0,
+            },
         ],
         'score': {
             'total': 71, 'max': 100,
             'breakdown': {
-                'Contact Info': {'earned': 10, 'max': 10, 'present': True},
-                'Summary/Objective': {'earned': 0, 'max': 8, 'present': False},
-                'Education': {'earned': 15, 'max': 15, 'present': True},
-                'Experience': {'earned': 20, 'max': 20, 'present': True},
-                'Skills': {'earned': 15, 'max': 15, 'present': True},
-                'Projects': {'earned': 0, 'max': 12, 'present': False},
-                'Certifications': {'earned': 10, 'max': 10, 'present': True},
-                'Achievements': {'earned': 0, 'max': 5, 'present': False},
-                'Hobbies/Interests': {'earned': 0, 'max': 5, 'present': False},
+                'Contact Info'      : {'earned': 10, 'max': 10, 'present': True},
+                'Summary/Objective' : {'earned':  0, 'max':  8, 'present': False},
+                'Education'         : {'earned': 15, 'max': 15, 'present': True},
+                'Experience'        : {'earned': 20, 'max': 20, 'present': True},
+                'Skills'            : {'earned': 15, 'max': 15, 'present': True},
+                'Projects'          : {'earned':  0, 'max': 12, 'present': False},
+                'Certifications'    : {'earned': 10, 'max': 10, 'present': True},
+                'Achievements'      : {'earned':  0, 'max':  5, 'present': False},
+                'Hobbies/Interests' : {'earned':  0, 'max':  5, 'present': False},
             },
         },
         'courses': demo_courses,

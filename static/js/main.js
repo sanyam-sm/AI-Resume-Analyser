@@ -1,4 +1,4 @@
-/* ── main.js — AI Resume Analyzer (BERT + NER) ──────────────── */
+/* ── main.js — AI Resume Analyzer ──────────────── */
 
 const uploadZone  = document.getElementById('upload-zone');
 const fileInput   = document.getElementById('file-input');
@@ -104,7 +104,7 @@ function renderResults(data, meta = {}) {
   renderModelBanner(meta, data);
   renderStats(data);
   renderProfile(data);
-  renderCategory(data);
+  renderProjectField(data);
   renderScore(data);
   renderPredictions(data);
   renderSkills(data);
@@ -120,7 +120,7 @@ function renderResults(data, meta = {}) {
 
 // ── Model Banner ─────────────────────────────────────────────────────────────
 function renderModelBanner(meta, data) {
-  const el = document.getElementById('model-banner');
+  const el       = document.getElementById('model-banner');
   const navBadge = document.getElementById('nav-badge');
 
   if (!meta || meta.status === 'error') {
@@ -130,7 +130,7 @@ function renderModelBanner(meta, data) {
     return;
   }
 
-  const mode = meta.model_mode || 'ml';
+  const mode   = meta.model_mode || 'ml';
   const isBert = mode === 'bert';
   const hasNer = meta.ner_available;
 
@@ -139,8 +139,8 @@ function renderModelBanner(meta, data) {
   }
 
   const modeName = isBert ? 'BERT Domain Classifier' : (meta.model_name || 'ML Model');
-  const acc = isBert ? (meta.bert_accuracy || meta.accuracy || '—') : (meta.accuracy || '—');
-  const f1 = isBert ? (meta.bert_f1 || meta.f1_weighted || '—') : (meta.f1_weighted || '—');
+  const acc      = isBert ? (meta.bert_accuracy || meta.accuracy || '—') : (meta.accuracy || '—');
+  const f1       = isBert ? (meta.bert_f1 || meta.f1_weighted || '—') : (meta.f1_weighted || '—');
 
   el.innerHTML = `
     <div class="model-banner-left">
@@ -161,16 +161,16 @@ function renderModelBanner(meta, data) {
 
 // ── Stats Row ─────────────────────────────────────────────────────────────────
 function renderStats(data) {
-  const e = data.extracted  || {};
-  const s = data.score      || {};
+  const e          = data.extracted  || {};
+  const s          = data.score      || {};
   const jobMatches = data.job_matches || [];
-  const topMatch = jobMatches.length > 0 ? jobMatches[0].match_pct : 0;
+  const topMatch   = jobMatches.length > 0 ? jobMatches[0].match_pct : 0;
 
   const stats = [
-    { val: s.total || 0,                    label: 'Resume Score',    color: scoreColor(s.total), unit: '/100' },
-    { val: data.skills?.current?.length || 0, label: 'Skills Detected', color: 'var(--violet2)',   unit: '' },
-    { val: Math.round(topMatch),             label: 'Best Job Match',  color: 'var(--emerald)',    unit: '%' },
-    { val: e.pages || 0,                     label: 'Pages',           color: 'var(--amber)',      unit: '' },
+    { val: s.total || 0,                      label: 'Resume Score',    color: scoreColor(s.total), unit: '/100' },
+    { val: data.skills?.current?.length || 0, label: 'Skills Detected', color: 'var(--violet2)',    unit: '' },
+    { val: Math.round(topMatch),              label: 'Best Job Match',  color: 'var(--emerald)',    unit: '%' },
+    { val: e.pages || 0,                      label: 'Pages',           color: 'var(--amber)',      unit: '' },
   ];
 
   document.getElementById('stat-grid').innerHTML = stats.map(s => `
@@ -186,8 +186,12 @@ function renderProfile(data) {
   const p   = data.prediction   || {};
   const ner = data.ner_entities || {};
   const lvl = p.experience_level || 'Unknown';
-  const initials = (e.name || 'RR').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-  const badgeClass = lvl.includes('Senior') ? 'badge-senior' : lvl.includes('Mid') ? 'badge-mid' : lvl.includes('Junior') ? 'badge-junior' : 'badge-fresher';
+
+  const initials   = (e.name || 'RR').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  const badgeClass = lvl.includes('Senior') ? 'badge-senior'
+                   : lvl.includes('Mid')    ? 'badge-mid'
+                   : lvl.includes('Junior') ? 'badge-junior'
+                   : 'badge-fresher';
 
   const location = ner.locations && ner.locations.length > 0
     ? (ner.locations[0].text || ner.locations[0]) : '';
@@ -204,31 +208,61 @@ function renderProfile(data) {
   `;
 }
 
-// ── Category Card ─────────────────────────────────────────────────────────────
-function renderCategory(data) {
-  const p    = data.prediction || {};
-  const top  = p.top_predictions?.[0] || {};
-  const conf = top.confidence || 0;
-  const mode = p.model_used || 'ml';
-  const isBert = mode === 'bert';
+// ── Project Field Card ────────────────────────────────────────────────────────
+// Shows the best-matched job role from skill-based matching.
+// Much more accurate than the raw ML category (which can be misleading —
+// e.g. HEALTHCARE for a data science student who built a heart disease project).
+function renderProjectField(data) {
+  const jobMatches = data.job_matches || [];
+  const el         = document.getElementById('card-category');
 
-  const modeLabel = isBert
-    ? 'Classified by fine-tuned BERT model on resume text.'
-    : 'Based on TF-IDF feature extraction and the best-performing ML classifier.';
+  if (!el) return;
 
-  document.getElementById('card-category').innerHTML = `
-    <div class="card-title"><span class="dot" style="background:var(--violet2)"></span>${isBert ? 'BERT' : 'ML'} Prediction</div>
-    <div class="category-name">${p.category || '—'}</div>
-    <div class="category-sub">Predicted job category · ${conf.toFixed(1)}% confidence</div>
+  if (jobMatches.length === 0) {
+    el.innerHTML = `
+      <div class="card-title"><span class="dot" style="background:var(--violet2)"></span>Project Field</div>
+      <div class="empty-state">Upload a resume to see your project field.</div>`;
+    return;
+  }
+
+  // Best matched role = top result from skill-based job matching
+  const topMatch      = jobMatches[0];
+  const role          = topMatch.role          || '—';
+  const matchPct      = topMatch.match_pct     || 0;
+  const matchedSkills = topMatch.matched_skills || [];
+
+  // Color based on match percentage
+  const pctColor = matchPct >= 70 ? 'var(--emerald)'
+                 : matchPct >= 40 ? 'var(--cyan)'
+                 : 'var(--amber)';
+
+  // Show top 4 matched skills as tags
+  const skillTags = matchedSkills.slice(0, 4).map(s =>
+    `<span style="font-size:.75rem;padding:3px 10px;border-radius:6px;
+      background:rgba(124,58,237,.12);border:1px solid rgba(124,58,237,.2);
+      color:var(--violet2)">${escapeHtml(s)}</span>`
+  ).join('');
+
+  el.innerHTML = `
+    <div class="card-title"><span class="dot" style="background:var(--violet2)"></span>Project Field</div>
+    <div class="category-name">${escapeHtml(role)}</div>
+    <div class="category-sub">Best matched job role · ${matchPct.toFixed(1)}% skill match</div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-top:8px;">
       <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
-        <span style="font-size:.82rem;color:var(--txt2)">Model Confidence</span>
-        <span style="font-size:.82rem;font-weight:700;color:var(--violet2)">${conf.toFixed(1)}%</span>
+        <span style="font-size:.82rem;color:var(--txt2)">Skill Match Score</span>
+        <span style="font-size:.82rem;font-weight:700;color:${pctColor}">${matchPct.toFixed(1)}%</span>
       </div>
-      <div class="pred-bar-bg"><div class="pred-bar-fill" style="width:0%;background:linear-gradient(90deg,var(--violet),var(--violet2))" data-target="${conf}"></div></div>
+      <div class="pred-bar-bg">
+        <div class="pred-bar-fill" style="width:0%;background:linear-gradient(90deg,var(--violet),var(--violet2))" data-target="${matchPct}"></div>
+      </div>
     </div>
-    <div style="margin-top:16px;font-size:.82rem;color:var(--txt2);line-height:1.5;">
-      ${modeLabel}
+    ${skillTags ? `
+    <div style="margin-top:14px;">
+      <div style="font-size:.75rem;color:var(--txt3);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">Matched Skills</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">${skillTags}</div>
+    </div>` : ''}
+    <div style="margin-top:14px;font-size:.82rem;color:var(--txt2);line-height:1.5;">
+      Based on your technical skills and experience level.
     </div>`;
   animateBars();
 }
@@ -238,7 +272,7 @@ function renderScore(data) {
   const s = data.score || { total: 0, max: 100, breakdown: {} };
 
   const breakdownHtml = Object.entries(s.breakdown || {}).map(([name, info]) => {
-    const pct2 = info.max > 0 ? Math.round((info.earned / info.max) * 100) : 0;
+    const pct2  = info.max > 0 ? Math.round((info.earned / info.max) * 100) : 0;
     const color = info.present ? 'var(--emerald)' : 'var(--txt3)';
     return `
       <div class="score-row">
@@ -297,7 +331,7 @@ function scoreColor(score) {
 
 // ── Top Predictions ───────────────────────────────────────────────────────────
 function renderPredictions(data) {
-  const preds = data.prediction?.top_predictions || [];
+  const preds  = data.prediction?.top_predictions || [];
   const colors = [
     'linear-gradient(90deg,var(--violet),var(--violet2))',
     'linear-gradient(90deg,var(--cyan),#38bdf8)',
@@ -325,9 +359,9 @@ function renderPredictions(data) {
 
 // ── Skills Card ───────────────────────────────────────────────────────────────
 function renderSkills(data) {
-  const current    = data.skills?.current || [];
-  const withConf   = data.skills?.current_with_confidence || [];
-  const skillGaps  = data.skill_gaps || [];
+  const current   = data.skills?.current || [];
+  const withConf  = data.skills?.current_with_confidence || [];
+  const skillGaps = data.skill_gaps || [];
 
   const missingSet = new Set();
   skillGaps.forEach(gap => {
@@ -356,7 +390,7 @@ function renderSkills(data) {
   document.getElementById('card-skills').innerHTML = `
     <div class="card-title"><span class="dot" style="background:var(--rose)"></span>Skills Analysis</div>
     <div style="margin-bottom:20px;">
-      <div style="font-size:.82rem;font-weight:600;color:var(--txt2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.05em">NER-Extracted Skills (${current.length})</div>
+      <div style="font-size:.82rem;font-weight:600;color:var(--txt2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.05em">Extracted Skills (${current.length})</div>
       <div class="skills-grid">${currentHtml}</div>
     </div>
     <div>
@@ -367,7 +401,6 @@ function renderSkills(data) {
 }
 
 // ── NER Extracted Entities ────────────────────────────────────────────────────
-// Now uses structured experience_entries and education_entries from regex parser
 function renderNerEntities(data) {
   const ner = data.ner_entities || {};
   const el  = document.getElementById('card-ner-entities');
@@ -377,7 +410,7 @@ function renderNerEntities(data) {
   const locations  = ner.locations          || [];
   const yoe        = ner.years_of_experience || '';
 
-  // Build experience rows: "Senior Backend Engineer @ Razorpay (Jan 2021 – Present)"
+  // Work experience rows
   const expHtml = expEntries.length > 0
     ? expEntries.map(e => {
         const line = [
@@ -389,15 +422,21 @@ function renderNerEntities(data) {
       }).join('')
     : '<span style="color:var(--txt3);font-size:.82rem">Not detected</span>';
 
-  // Build education rows: "B.Tech in Computer Engineering | Savitribai Phule Pune University | 2019"
+  // ── FIX: Education rows — degree, college and year on separate lines ───────
+  // Previously all joined on one line with | which hid college/year if empty.
+  // Now each piece is on its own line so all 3 always show when present.
   const eduHtml = eduEntries.length > 0
     ? eduEntries.map(e => {
-        const parts = [
-          e.degree  ? `<strong>${escapeHtml(e.degree)}</strong>`  : '',
-          e.college ? escapeHtml(e.college) : '',
-          e.year    ? `<span style="color:var(--txt3)">${escapeHtml(e.year)}</span>` : '',
-        ].filter(Boolean);
-        return `<div style="margin-bottom:4px">${parts.join(' <span style="color:var(--txt3)">|</span> ')}</div>`;
+        const degree  = e.degree
+          ? `<div><strong>${escapeHtml(e.degree)}</strong></div>`
+          : '';
+        const college = e.college
+          ? `<div style="font-size:.82rem;color:var(--txt2);margin-top:3px">🏫 ${escapeHtml(e.college)}</div>`
+          : '';
+        const year    = e.year
+          ? `<div style="font-size:.78rem;color:var(--txt3);margin-top:2px">📅 ${escapeHtml(e.year)}</div>`
+          : '';
+        return `<div style="margin-bottom:12px">${degree}${college}${year}</div>`;
       }).join('')
     : '<span style="color:var(--txt3);font-size:.82rem">Not detected</span>';
 
@@ -411,17 +450,16 @@ function renderNerEntities(data) {
       }).join(', ')
     : '<span style="color:var(--txt3);font-size:.82rem">Not detected</span>';
 
-  // Check if anything to show
   const hasData = expEntries.length || eduEntries.length || locations.length || yoe;
   if (!hasData) {
     el.innerHTML = `
-      <div class="card-title"><span class="dot" style="background:var(--cyan)"></span>NER Extracted Details</div>
+      <div class="card-title"><span class="dot" style="background:var(--cyan)"></span>Extracted Details</div>
       <div class="empty-state">No entities extracted.</div>`;
     return;
   }
 
   el.innerHTML = `
-    <div class="card-title"><span class="dot" style="background:var(--cyan)"></span>NER Extracted Details</div>
+    <div class="card-title"><span class="dot" style="background:var(--cyan)"></span>Extracted Details</div>
     <table class="ner-table">
       <thead><tr><th>Entity Type</th><th>Extracted Values</th></tr></thead>
       <tbody>
@@ -442,7 +480,7 @@ function renderNerEntities(data) {
 // ── Job Role Matches ──────────────────────────────────────────────────────────
 function renderJobMatches(data) {
   const matches = data.job_matches || [];
-  const el = document.getElementById('card-job-matches');
+  const el      = document.getElementById('card-job-matches');
 
   if (matches.length === 0) {
     el.innerHTML = `
@@ -462,7 +500,7 @@ function renderJobMatches(data) {
   const html = matches.map((m, i) => {
     const matchedCount = m.matched_skills ? m.matched_skills.length : 0;
     const totalReq     = m.total_required || (matchedCount + (m.missing_core || []).length + (m.missing_preferred || []).length);
-    const desc = m.missing_core && m.missing_core.length > 0
+    const desc         = m.missing_core && m.missing_core.length > 0
       ? `Missing core: ${m.missing_core.join(', ')}`
       : `${matchedCount}/${totalReq} skills matched`;
 
@@ -524,7 +562,7 @@ function renderSkillGaps(data) {
 // ── Project Ideas ─────────────────────────────────────────────────────────────
 function renderProjectIdeas(data) {
   const projects = data.project_ideas || [];
-  const el = document.getElementById('card-project-ideas');
+  const el       = document.getElementById('card-project-ideas');
 
   if (projects.length === 0) {
     el.innerHTML = `
@@ -535,7 +573,7 @@ function renderProjectIdeas(data) {
 
   const html = projects.map(proj => {
     const matchedLower = new Set((proj.matched_skills || []).map(s => s.toLowerCase()));
-    const skillTags = (proj.all_skills || []).map(s => {
+    const skillTags    = (proj.all_skills || []).map(s => {
       const isMatched = matchedLower.has(s.toLowerCase());
       return `<span class="project-skill-tag${isMatched ? '' : ' dim'}">${s}</span>`;
     }).join('');
@@ -560,7 +598,7 @@ function renderProjectIdeas(data) {
 // ── Courses Card ──────────────────────────────────────────────────────────────
 function renderCourses(data) {
   const courses = data.courses || [];
-  const html = courses.map(c => `
+  const html    = courses.map(c => `
     <div class="course-item">
       <div>
         <span class="course-name">🎓 ${escapeHtml(c.name)}</span>
@@ -582,16 +620,16 @@ function renderPdfPreview(data) {
 
   if (data.pdf_preview) {
     cardPdf.style.display = 'block';
-    const src = `data:application/pdf;base64,${data.pdf_preview}`;
+    const src       = `data:application/pdf;base64,${data.pdf_preview}`;
     const newToggle = toggle.cloneNode(true);
     toggle.parentNode.replaceChild(newToggle, toggle);
     newToggle.addEventListener('click', () => {
       if (frame.style.display === 'none') {
-        frame.src = src;
-        frame.style.display = 'block';
+        frame.src             = src;
+        frame.style.display   = 'block';
         newToggle.textContent = 'Hide PDF Preview';
       } else {
-        frame.style.display = 'none';
+        frame.style.display   = 'none';
         newToggle.textContent = 'Show PDF Preview';
       }
     });
@@ -612,7 +650,7 @@ function animateBars() {
 
 function escapeHtml(text) {
   if (!text) return '';
-  const div = document.createElement('div');
+  const div       = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
 }

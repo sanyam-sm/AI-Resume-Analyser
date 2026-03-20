@@ -224,15 +224,6 @@
     .badge-junior  { background: rgba(245,158,11,.12); color: var(--amber);   border: 1px solid rgba(245,158,11,.2); }
     .badge-fresher { background: rgba(244,63,94,.12);  color: var(--rose);    border: 1px solid rgba(244,63,94,.2);  }
 
-    /* ── Category card ─────────────────────────────────────────────────────── */
-    .category-name {
-      font-family: var(--font-h); font-size: 1.8rem; font-weight: 800;
-      background: linear-gradient(135deg, var(--violet2), var(--cyan));
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      margin-bottom: 4px;
-    }
-    .category-sub { color: var(--txt2); font-size: .88rem; margin-bottom: 20px; }
-
     /* ── Score Ring ──────────────────────────────────────────────────────── */
     .score-wrap { display: flex; align-items: center; gap: 32px; }
     .score-ring-container { position: relative; width: 140px; height: 140px; flex-shrink: 0; }
@@ -253,7 +244,6 @@
     .score-bar-bg { flex: 1; height: 5px; background: var(--border); border-radius: 10px; overflow: hidden; }
     .score-bar-fill { height: 100%; border-radius: 10px; transition: width 1s cubic-bezier(.22,.61,.36,1); }
     .score-row-val { font-size: .75rem; font-weight: 600; width: 34px; text-align: right; }
-    .check-icon { font-size: .7rem; }
 
     /* ── Skills ─────────────────────────────────────────────────────────── */
     .skills-grid { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -261,9 +251,9 @@
       font-size: .8rem; font-weight: 500; padding: 5px 12px; border-radius: 8px;
       animation: fadeUp .4s ease both;
     }
-    .skill-tag.current { background: rgba(124,58,237,.15); border: 1px solid rgba(124,58,237,.25); color: var(--violet2); }
-    .skill-tag.recommended { background: rgba(6,182,212,.1); border: 1px solid rgba(6,182,212,.2); color: var(--cyan); }
-    .skill-tag.missing { background: rgba(244,63,94,.08); border: 1px dashed rgba(244,63,94,.25); color: var(--rose); }
+    .skill-tag.current     { background: rgba(124,58,237,.15); border: 1px solid rgba(124,58,237,.25); color: var(--violet2); }
+    .skill-tag.recommended { background: rgba(6,182,212,.1);   border: 1px solid rgba(6,182,212,.2);   color: var(--cyan); }
+    .skill-tag.missing     { background: rgba(244,63,94,.08);  border: 1px dashed rgba(244,63,94,.25); color: var(--rose); }
 
     /* ── Predictions bar chart ───────────────────────────────────────────── */
     .pred-list { display: flex; flex-direction: column; gap: 10px; }
@@ -324,7 +314,7 @@
     /* ── NER Entities Table ─────────────────────────────────────────────── */
     .ner-table { width: 100%; border-collapse: collapse; }
     .ner-table th { text-align: left; font-size: .75rem; color: var(--txt3); text-transform: uppercase; letter-spacing: .06em; padding: 8px 12px; border-bottom: 1px solid var(--border); }
-    .ner-table td { font-size: .88rem; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    .ner-table td { font-size: .88rem; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
     .ner-table td:first-child { color: var(--txt2); font-weight: 500; width: 160px; }
     .ner-confidence { font-size: .72rem; color: var(--txt3); margin-left: 4px; }
 
@@ -452,7 +442,7 @@
     <!-- Stats Row -->
     <div class="stat-grid" id="stat-grid"></div>
 
-    <!-- Row 1: Profile + Category -->
+    <!-- Row 1: Profile + Project Field (replaces ML Prediction) -->
     <div class="grid-2">
       <div class="card animate d1" id="card-profile"></div>
       <div class="card animate d2" id="card-category"></div>
@@ -464,11 +454,11 @@
       <div class="card animate d4" id="card-predictions"></div>
     </div>
 
-    <!-- Row 3: Skills (NER-extracted) -->
+    <!-- Row 3: Skills -->
     <div class="card animate d5" id="card-skills" style="margin-bottom:20px;"></div>
 
-    <!-- Row 4: NER Extracted Details -->
-    <div class="card animate" id="card-ner-entities" style="margin-bottom:20px;"></div>
+    <!-- Row 4: Extracted Details (education, experience, locations) -->
+    <div class="card animate d5" id="card-ner-entities" style="margin-bottom:20px;"></div>
 
     <!-- Row 5: Job Role Match + Skill Gaps -->
     <div class="grid-2">
@@ -491,7 +481,7 @@
   </section>
 
   <footer>
-    <p>ResumeAI · BERT + NER Powered · Trained on the <a href="https://www.kaggle.com/datasets/snehaanbhawal/resume-dataset" target="_blank">Kaggle Resume Dataset</a> · Built with Flask + HuggingFace Transformers</p>
+    <p>ResumeAI · ML + Gemini Powered · Trained on the <a href="https://www.kaggle.com/datasets/snehaanbhawal/resume-dataset" target="_blank">Kaggle Resume Dataset</a> · Built with Flask + HuggingFace Transformers</p>
   </footer>
 
   <script src="/static/js/main.js"></script>

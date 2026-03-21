@@ -60,6 +60,49 @@ _NAME_REJECTLIST = {
 }
 
 
+# ── Tech/tool names — never valid as company names ────────────────────────────
+_COMPANY_TECH_BLOCKLIST = {
+    'flask', 'django', 'fastapi', 'react', 'angular', 'vue', 'next.js',
+    'node.js', 'express', 'docker', 'kubernetes', 'terraform', 'ansible',
+    'github', 'gitlab', 'github actions', 'bitbucket', 'jenkins', 'circleci',
+    'aws', 'gcp', 'azure', 'ec2', 's3', 'lambda', 'sagemaker',
+    'python', 'java', 'javascript', 'typescript', 'c++', 'c#', 'go', 'rust',
+    'sql', 'mysql', 'postgresql', 'mongodb', 'redis', 'sqlite', 'oracle',
+    'kafka', 'spark', 'hadoop', 'airflow', 'mlflow', 'ci/cd',
+    'tensorflow', 'pytorch', 'keras', 'scikit-learn', 'scikit',
+    'pandas', 'numpy', 'matplotlib', 'seaborn',
+    'render', 'heroku', 'vercel', 'netlify', 'firebase', 'supabase',
+    'html', 'css', 'bootstrap', 'tailwind', 'webpack',
+    'git', 'linux', 'bash', 'postman', 'jira', 'figma',
+    'xgboost', 'lightgbm', 'opencv', 'nltk', 'spacy',
+}
+
+_COMPANY_PROJECT_KEYWORDS = {
+    'prediction', 'analysis', 'detection', 'classifier', 'model',
+    'system', 'app', 'application', 'dashboard', 'pipeline',
+    'project', 'tracker', 'generator', 'analyzer', 'bot',
+}
+
+
+def _is_valid_company(company: str, designation: str = '', duration: str = '') -> bool:
+    """Returns True only if string looks like a real company name."""
+    if not company or not company.strip():
+        return False
+    c  = company.strip()
+    cl = c.lower()
+    if c.startswith('@'):                                     return False
+    if cl in _COMPANY_TECH_BLOCKLIST:                        return False
+    if any(tech in cl for tech in _COMPANY_TECH_BLOCKLIST):  return False
+    if any(kw in cl for kw in _COMPANY_PROJECT_KEYWORDS):    return False
+    if len(c) < 3:                                           return False
+    if not designation and not duration:                      return False
+    if any(ch in c for ch in ['/', 'http', '.com', '.io']):  return False
+    if designation and designation.lower() in _COMPANY_TECH_BLOCKLIST: return False
+    return True
+
+
+
+
 # =============================================================================
 # PDF Extraction
 # =============================================================================
@@ -484,18 +527,26 @@ class ResumeNERExtractor:
 
         # Regex fallback for experience
         if not experience_entries:
-            regex_exp          = extract_experience(text)
-            experience_entries = regex_exp if regex_exp else [
-                {
-                    'designation': grouped.get('Designation', [{}])[i]['text']
-                                   if i < len(grouped.get('Designation', [])) else '',
-                    'company'    : d['text'],
-                    'duration'   : '',
-                    'confidence' : 0.5,
-                }
-                for i, d in enumerate(grouped.get('Companies worked at',
-                                                   grouped.get('Company', [])))
-            ]
+            regex_exp = extract_experience(text)
+            if regex_exp:
+                experience_entries = regex_exp
+            else:
+                # BERT 'Companies worked at' entities — filter out tech names
+                # BERT often tags tools from project descriptions as companies
+                bert_companies = grouped.get('Companies worked at',
+                                             grouped.get('Company', []))
+                bert_desigs    = grouped.get('Designation', [])
+                experience_entries = []
+                for i, d in enumerate(bert_companies):
+                    designation = bert_desigs[i]['text'] if i < len(bert_desigs) else ''
+                    company     = d['text']
+                    if _is_valid_company(company, designation, ''):
+                        experience_entries.append({
+                            'designation': designation,
+                            'company'    : company,
+                            'duration'   : '',
+                            'confidence' : 0.5,
+                        })
 
         # Regex fallback for education
         if not education_entries:
@@ -663,38 +714,16 @@ RESUME TEXT:
             #   - company that is NOT a known technology/tool name
             #   - company length > 2 characters
             #   - either a designation OR a duration present
-            _TECH_NAMES = {
-                'flask', 'django', 'react', 'node.js', 'docker', 'kubernetes',
-                'github', 'gitlab', 'github actions', 'jenkins', 'aws', 'gcp',
-                'azure', 'python', 'java', 'javascript', 'typescript', 'sql',
-                'mysql', 'mongodb', 'postgresql', 'redis', 'kafka', 'spark',
-                'tensorflow', 'pytorch', 'scikit-learn', 'pandas', 'numpy',
-                'render', 'heroku', 'vercel', 'netlify', 'firebase',
-            }
+            # Filter using module-level _is_valid_company()
+            exp = [
+                e for e in raw_exp
+                if _is_valid_company(
+                    str(e.get('company', '')),
+                    str(e.get('designation', '')),
+                    str(e.get('duration', ''))
+                )
+            ]
 
-            exp = []
-            for e in raw_exp:
-                company     = str(e.get('company', '')).strip()
-                designation = str(e.get('designation', '')).strip()
-                duration    = str(e.get('duration', '')).strip()
-
-                # Reject if company starts with @
-                if company.startswith('@'):
-                    continue
-                # Reject if company is a known tech tool
-                if company.lower() in _TECH_NAMES:
-                    continue
-                # Reject if company is too short (1-2 chars = garbage)
-                if len(company) < 3:
-                    continue
-                # Reject if no designation AND no duration (incomplete entry)
-                if not designation and not duration:
-                    continue
-                # Reject if company looks like a URL or path
-                if any(c in company for c in ['/', '\\', 'http', '.com', '.io']):
-                    continue
-
-                exp.append(e)
 
             print(f"  Gemini edu/exp — edu: {len(edu)}, exp: {len(exp)} (filtered from {len(raw_exp)})")
             return {'education_entries': edu, 'experience_entries': exp}
@@ -1055,38 +1084,48 @@ def get_project_ideas(extracted_skills: list, max_projects: int = 4,
             diff_guide = "Include a mix of Beginner, Intermediate, and Advanced difficulty."
 
         try:
+            # Simplified prompt — fewer fields = less chance of malformed JSON
             prompt = (
-                f"You are a project idea generator for software developers.\n"
-                f"Based on these skills: {', '.join(skill_names[:15])}\n"
-                f"Experience level: {experience_level or 'Unknown'}\n\n"
-                f"Generate exactly {max_projects} unique, practical project ideas that:\n"
-                f"- Use a good mix of the listed skills\n"
-                f"- {diff_guide}\n"
-                f"- Are portfolio-worthy and impressive to employers\n"
-                f"- Are specific (not generic)\n\n"
-                "Respond ONLY with a JSON array, no markdown, no extra text:\n"
-                '[{"name":"...","description":"2 sentences.","matched_skills":["Skill1"],'
-                '"all_skills":["Skill1","Skill2"],"difficulty":"Beginner","relevance":90.0}]'
+                f"Generate exactly {max_projects} project ideas for a developer "
+                f"with these skills: {', '.join(skill_names[:12])}.\n"
+                f"Experience level: {experience_level or 'Unknown'}.\n"
+                f"{diff_guide}\n\n"
+                f"Return ONLY a valid JSON array. No markdown, no explanation, no extra text.\n"
+                f"Each object must have exactly these fields:\n"
+                f"name (string), description (1 sentence max 20 words), "
+                f"matched_skills (array of 2-3 strings), "
+                f"difficulty (one of: Beginner, Intermediate, Advanced), "
+                f"relevance (number 0-100).\n"
+                f"Example: "
+                f'[{{"name":"Price Predictor","description":"ML model predicting house prices using regression.",'
+                f'"matched_skills":["Python","Machine Learning"],"difficulty":"Intermediate","relevance":95.0}}]'
             )
             payload = json.dumps({
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"maxOutputTokens": 1000, "temperature": 0.7}
+                "generationConfig": {
+                    "maxOutputTokens": 800,
+                    "temperature"    : 0.5,    # lower = more consistent JSON
+                    "responseMimeType": "application/json",   # force JSON output
+                }
             }).encode()
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
             req = urllib.request.Request(url, data=payload,
                                          headers={"content-type": "application/json"}, method="POST")
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=12) as resp:
                 data     = json.loads(resp.read())
                 raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                # Aggressive JSON cleaning — Gemini sometimes adds preamble/postamble
                 raw_text = re.sub(r"```json|```", "", raw_text).strip()
-                # Extract just the JSON array — find [ ... ] boundaries
+                # Extract [ ... ] array robustly
                 arr_start = raw_text.find("[")
                 arr_end   = raw_text.rfind("]") + 1
                 if arr_start >= 0 and arr_end > arr_start:
                     raw_text = raw_text[arr_start:arr_end]
                 projects = json.loads(raw_text)
                 if isinstance(projects, list) and projects:
+                    # Normalise — ensure all_skills field exists
+                    for p in projects:
+                        if 'all_skills' not in p:
+                            p['all_skills'] = p.get('matched_skills', [])
                     return projects[:max_projects]
         except Exception as e:
             print(f"  Gemini project ideas failed: {e} — using fallback")

@@ -1,10 +1,12 @@
 """
 app.py — AI Resume Analyzer Flask Backend
 
-Extraction pipeline (3-tier):
-  1. BERT NER (yashpwr/resume-ner-bert-v2) — Primary, Deep Learning
-  2. Gemini 2.0 Flash API                  — Fallback if BERT unavailable
-  3. Regex                                 — Last resort, no API key needed
+Extraction architecture:
+  BERT NER (yashpwr/resume-ner-bert-v2)  — Primary DL extractor
+    • name, email, skills, locations, years_of_experience → BERT
+    • education_entries, experience_entries               → Gemini 2.5 Flash Lite (context-aware)
+    • phone, email validation                             → Regex always
+  Regex fallback                          — when BERT unavailable
 
 Classification:
   XGBoost + TF-IDF (v2.0) — 52 categories, 84% accuracy, 11,446 training samples
@@ -45,7 +47,7 @@ from utils.parser import (
     extract_text_from_pdf, clean_text, extract_email,
     extract_phone, extract_name, count_pages,
     score_resume, detect_experience_level,
-    ResumeNERExtractor, extract_resume_with_gemini,
+    ResumeNERExtractor,
     compute_job_matches, compute_skill_gaps,
     get_project_ideas,
     extract_skills_by_keyword, merge_skills,
@@ -81,26 +83,24 @@ def load_models():
         print(f"  ML model failed: {e}")
 
     # ── BERT NER: Primary DL extractor ────────────────────────────────────────
+    # Handles: name, email, skills, locations, years_of_experience
+    # Gemini (inside BERT extractor) handles: education + experience entries
+    # Regex fallback: when BERT unavailable
     try:
         components['ner_extractor'] = ResumeNERExtractor()
     except Exception as e:
         print(f"  BERT NER unavailable: {e}")
-        if os.environ.get('GEMINI_API_KEY'):
-            print("  → Will use Gemini API as extraction fallback")
-        else:
-            print("  → Will use regex as extraction fallback")
+        print("  → Will use regex extraction fallback")
 
     return components
 
 
 print("Loading models...")
 models = load_models()
-ner_mode = ('BERT' if models['ner_extractor']
-            else 'Gemini' if os.environ.get('GEMINI_API_KEY')
-            else 'Regex')
-print(f"Ready!  ML: {models['mode']} | Extraction: {ner_mode}")
+ner_status = 'BERT NER ✓' if models['ner_extractor'] else 'Regex fallback (BERT unavailable)'
+print(f"Ready!  ML: {models['mode']} | Extraction: {ner_status}")
 print(f"  YouTube API : {'configured ✓' if YOUTUBE_API_KEY else 'not set'}")
-print(f"  Gemini API  : {'configured ✓' if os.environ.get('GEMINI_API_KEY') else 'not set'}")
+print(f"  Gemini API  : {'configured ✓ (edu/exp extraction)' if os.environ.get('GEMINI_API_KEY') else 'not set (regex fallback for edu/exp)'}")
 
 
 def allowed_file(filename):
@@ -346,7 +346,7 @@ def api_model_info():
         'accuracy'     : round(meta.get('accuracy',    0) * 100, 2),
         'f1_weighted'  : round(meta.get('f1_weighted', 0) * 100, 2),
         'f1_macro'     : round(meta.get('f1_macro',    0) * 100, 2),
-        'ner_model'    : 'yashpwr/resume-ner-bert-v2' if models['ner_extractor'] else 'Gemini 2.0 Flash',
+        'ner_model'    : 'yashpwr/resume-ner-bert-v2' if models['ner_extractor'] else 'Regex fallback',
         'ner_available': models['ner_extractor'] is not None,
         'num_classes'  : meta.get('num_classes',    0),
         'classes'      : meta.get('classes',       []),
@@ -379,16 +379,29 @@ def api_analyze():
         pages      = count_pages(str(tmp_path))
         word_count = len(raw_text.split())
 
-        # ── Entity Extraction: BERT → Gemini → Regex ──────────────────────────
+        # ── Entity Extraction ─────────────────────────────────────────────────
+        # BERT NER handles: name, email, skills, locations, years_of_experience
+        # Gemini (called inside BERT extractor): education + experience entries only
+        # Regex: phone always + fallback when BERT unavailable
         if models['ner_extractor']:
-            print("  Running BERT NER extraction...")
             try:
-                ner_results = models['ner_extractor'].extract(raw_text[:4000])
+                ner_results = models['ner_extractor'].extract(raw_text)
             except Exception as e:
-                print(f"  BERT NER error: {e} — falling back to Gemini/regex")
-                ner_results = extract_resume_with_gemini(raw_text)
+                print(f"  BERT NER error: {e} — using regex fallback")
+                ner_results = {
+                    'name': extract_name(raw_text), 'email': extract_email(raw_text),
+                    'phone': extract_phone(raw_text), 'skills': [],
+                    'years_of_experience': '', 'locations': [],
+                    'experience_entries': [], 'education_entries': [], 'all_entities': {},
+                }
         else:
-            ner_results = extract_resume_with_gemini(raw_text)
+            print("  BERT NER unavailable — using regex fallback")
+            ner_results = {
+                'name': extract_name(raw_text), 'email': extract_email(raw_text),
+                'phone': extract_phone(raw_text), 'skills': [],
+                'years_of_experience': '', 'locations': [],
+                'experience_entries': [], 'education_entries': [], 'all_entities': {},
+            }
 
         name  = ner_results.get('name',  '') or extract_name(raw_text)
         email = ner_results.get('email', '') or extract_email(raw_text)

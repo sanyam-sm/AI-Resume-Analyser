@@ -421,16 +421,15 @@ class ResumeNERExtractor:
                 return True
         return False
 
-    def extract(self, text: str, use_gemini_for_structured: bool = True) -> dict:
+    def extract(self, text: str) -> dict:
         """
-        Hybrid extraction strategy:
-          - BERT NER  → name, skills, locations, years_of_experience  (token-level DL)
-          - Gemini    → education_entries, experience_entries          (structured fields, context-aware)
-          - Regex     → phone, email + fallback when both unavailable
-        
-        Why split? BERT is excellent at identifying entity spans (skills, names).
-        Gemini understands document structure better — it correctly extracts
-        degree/college/year as clean structured JSON even from messy layouts.
+        Extraction strategy per field:
+          BERT NER → name, skills, locations, years_of_experience  (token-level DL)
+          Gemini   → education_entries, experience_entries only    (structured, context-aware)
+          Regex    → phone always + email validation + edu/exp fallback
+
+        Gemini is used ONLY for education and experience — not for name/skills/email.
+        BERT handles all token-level extraction. Regex is always the safety net.
         """
         chunks = self._chunk_text(text, max_chars=1800, overlap_chars=200)
         all_raw = []
@@ -474,16 +473,14 @@ class ResumeNERExtractor:
         experience_entries = []
         education_entries  = []
 
+        # ── Education + Experience: Gemini → Regex → BERT ───────────────────
+        # Gemini called ONLY for these two structured fields.
+        # All other extraction (name, skills, email, locations) done by BERT above.
         api_key = os.environ.get('GEMINI_API_KEY', '')
-        if use_gemini_for_structured and api_key:
-            try:
-                gemini_results     = extract_resume_with_gemini(text)
-                experience_entries = gemini_results.get('experience_entries', [])
-                education_entries  = gemini_results.get('education_entries',  [])
-                print(f"  Gemini structured fields — "
-                      f"exp: {len(experience_entries)}, edu: {len(education_entries)}")
-            except Exception as e:
-                print(f"  Gemini structured fields failed: {e} — using regex")
+        if api_key:
+            gemini_result      = extract_resume_with_gemini(text)
+            experience_entries = gemini_result.get('experience_entries', [])
+            education_entries  = gemini_result.get('education_entries',  [])
 
         # Regex fallback for experience
         if not experience_entries:
@@ -583,93 +580,138 @@ class ResumeNERExtractor:
 
 def extract_resume_with_gemini(raw_text: str) -> dict:
     """
-    Gemini fallback — used only when BERT NER is unavailable.
-    More accurate than pure regex but doesn't count as DL.
+    Gemini 2.5 Flash Lite — extracts ONLY education and experience entries.
+    Used exclusively inside ResumeNERExtractor.extract() for structured fields.
+
+    Why only these two fields?
+    - BERT NER handles name/skills/locations reliably (token-level DL)
+    - Education and experience require document-level context understanding:
+      e.g. correctly pairing degree + college + year even in messy layouts,
+      distinguishing real jobs from student projects in experience.
+    - Gemini reads the full document like a human and returns clean JSON.
+
+    Falls back gracefully: if API unavailable → caller uses regex.
     """
     api_key = os.environ.get('GEMINI_API_KEY', '')
     if not api_key:
-        return _regex_fallback_extraction(raw_text)
+        return {'education_entries': [], 'experience_entries': []}
 
-    prompt = f"""You are a professional resume parser. Extract information from the resume text below.
+    prompt = f"""You are a professional resume parser. Extract ONLY education and work experience from the resume below.
 
 STRICT RULES:
-- Return ONLY a valid JSON object. No markdown, no backticks, no explanation.
-- If a field is not found, use empty string "" or empty list [].
-- skills: ONLY technical skills (languages, frameworks, databases, tools, cloud).
-  NO soft skills, NO generic words like "Windows", "Technology", "Team".
-- experience_entries: ONLY real work experience or internships at companies.
-  If fresher/student with no real job experience, return [].
-- name: ONLY the person's actual first and last name — found just ABOVE phone/email.
-  NEVER return degree names, college names, or city names as the name.
-- years_of_experience: if fresher/student, return "".
+- Return ONLY valid JSON. No markdown, no backticks, no explanation.
+- experience_entries: ONLY paid jobs or formal internships at real companies.
+  A valid experience entry has: a job title AND a company name AND a date range.
+  Do NOT include: personal projects, academic projects, hackathons, training courses,
+  certifications, freelance gigs, or any entry that does not have a real company name.
+  Examples of INVALID entries: "@ GitHub Actions", "@ Flask", "House Price Prediction",
+  "Python Training", "ML Project", anything starting with @ or a technology name.
+  If the person is a student/fresher with no real paid job or internship, return [].
+- education_entries: include ALL qualifications (B.Tech, M.Tech, 12th, 10th, MBA etc).
+  Include the full college/university name exactly as written in the resume.
 
 Return exactly this JSON structure:
 {{
-  "name": "Full Name",
-  "email": "email@example.com",
-  "phone": "+91-XXXXXXXXXX",
-  "location": "City, State",
-  "years_of_experience": "",
-  "skills": ["Python", "Flask", "MySQL"],
   "experience_entries": [],
   "education_entries": [
-    {{"degree": "B.Tech Computer Science", "college": "College Name", "year": "2026", "confidence": 0.95}}
-  ],
-  "locations": [{{"text": "City, State", "confidence": 0.95}}]
+    {{
+      "degree": "Bachelor of Technology in Computer Science",
+      "college": "Chandigarh Engineering College - CGC Landran",
+      "year": "2026",
+      "confidence": 0.95
+    }}
+  ]
 }}
 
 RESUME TEXT:
-{raw_text[:4500]}"""
+{raw_text[:4000]}"""
 
     payload = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": 1500, "temperature": 0.1}
+        "generationConfig": {"maxOutputTokens": 800, "temperature": 0.1}
     }).encode()
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/"
+        f"models/gemini-2.5-flash-lite:generateContent?key={api_key}"
+    )
 
     try:
         req = urllib.request.Request(
             url, data=payload,
             headers={"Content-Type": "application/json"}, method="POST"
         )
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=12) as resp:
             data     = json.loads(resp.read())
-            raw_resp = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            raw_resp = re.sub(r"```json|```", "", raw_resp).strip()
-            extracted = json.loads(raw_resp)
+            raw_resp  = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            raw_resp  = re.sub(r"```json|```", "", raw_resp).strip()
+            # Extract JSON object boundaries robustly
+            obj_start = raw_resp.find("{")
+            obj_end   = raw_resp.rfind("}") + 1
+            if obj_start >= 0 and obj_end > obj_start:
+                raw_resp = raw_resp[obj_start:obj_end]
+            result    = json.loads(raw_resp)
 
-            name = extracted.get('name', '').strip()
-            if not _is_valid_name(name):
-                name = extract_name(raw_text)
+            edu = result.get('education_entries', [])
+            raw_exp = result.get('experience_entries', [])
 
-            raw_skills  = extracted.get('skills', [])
-            skills, seen_skills = [], set()
-            for s in raw_skills:
-                if not isinstance(s, str):
-                    continue
-                s   = s.strip()
-                key = s.lower()
-                if key and key not in _SKILL_BLOCKLIST and len(key) > 1 and key not in seen_skills:
-                    seen_skills.add(key)
-                    skills.append({'text': s, 'confidence': 0.90})
-
-            print(f"  Gemini fallback extraction — name: '{name}', skills: {len(skills)}")
-            return {
-                'name'               : name,
-                'email'              : extracted.get('email', '').strip() or extract_email(raw_text),
-                'phone'              : extracted.get('phone', '').strip() or extract_phone(raw_text),
-                'skills'             : skills,
-                'years_of_experience': extracted.get('years_of_experience', ''),
-                'locations'          : extracted.get('locations', []),
-                'experience_entries' : extracted.get('experience_entries', []),
-                'education_entries'  : extracted.get('education_entries', []),
-                'all_entities'       : {},
+            # ── Post-process: filter out invalid experience entries ────────────
+            # Gemini sometimes returns project technologies or tool names as
+            # company names (e.g. "@ GitHub Actions", "@ Flask").
+            # A valid experience entry must have:
+            #   - company that does NOT start with @
+            #   - company that is NOT a known technology/tool name
+            #   - company length > 2 characters
+            #   - either a designation OR a duration present
+            _TECH_NAMES = {
+                'flask', 'django', 'react', 'node.js', 'docker', 'kubernetes',
+                'github', 'gitlab', 'github actions', 'jenkins', 'aws', 'gcp',
+                'azure', 'python', 'java', 'javascript', 'typescript', 'sql',
+                'mysql', 'mongodb', 'postgresql', 'redis', 'kafka', 'spark',
+                'tensorflow', 'pytorch', 'scikit-learn', 'pandas', 'numpy',
+                'render', 'heroku', 'vercel', 'netlify', 'firebase',
             }
-    except Exception as e:
-        print(f"  Gemini fallback failed: {e} — using regex")
 
-    return _regex_fallback_extraction(raw_text)
+            exp = []
+            for e in raw_exp:
+                company     = str(e.get('company', '')).strip()
+                designation = str(e.get('designation', '')).strip()
+                duration    = str(e.get('duration', '')).strip()
+
+                # Reject if company starts with @
+                if company.startswith('@'):
+                    continue
+                # Reject if company is a known tech tool
+                if company.lower() in _TECH_NAMES:
+                    continue
+                # Reject if company is too short (1-2 chars = garbage)
+                if len(company) < 3:
+                    continue
+                # Reject if no designation AND no duration (incomplete entry)
+                if not designation and not duration:
+                    continue
+                # Reject if company looks like a URL or path
+                if any(c in company for c in ['/', '\\', 'http', '.com', '.io']):
+                    continue
+
+                exp.append(e)
+
+            print(f"  Gemini edu/exp — edu: {len(edu)}, exp: {len(exp)} (filtered from {len(raw_exp)})")
+            return {'education_entries': edu, 'experience_entries': exp}
+
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='ignore')
+        if e.code == 429:
+            if 'quota' in body.lower() or 'RESOURCE_EXHAUSTED' in body:
+                print(f"  Gemini DAILY QUOTA exhausted — using regex for edu/exp")
+            else:
+                print(f"  Gemini rate limit — using regex for edu/exp")
+        else:
+            print(f"  Gemini HTTP {e.code} — using regex for edu/exp")
+    except Exception as e:
+        print(f"  Gemini edu/exp failed: {e} — using regex")
+
+    return {'education_entries': [], 'experience_entries': []}
 
 
 def _regex_fallback_extraction(raw_text: str) -> dict:
@@ -1030,13 +1072,19 @@ def get_project_ideas(extracted_skills: list, max_projects: int = 4,
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"maxOutputTokens": 1000, "temperature": 0.7}
             }).encode()
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
             req = urllib.request.Request(url, data=payload,
                                          headers={"content-type": "application/json"}, method="POST")
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data     = json.loads(resp.read())
                 raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                # Aggressive JSON cleaning — Gemini sometimes adds preamble/postamble
                 raw_text = re.sub(r"```json|```", "", raw_text).strip()
+                # Extract just the JSON array — find [ ... ] boundaries
+                arr_start = raw_text.find("[")
+                arr_end   = raw_text.rfind("]") + 1
+                if arr_start >= 0 and arr_end > arr_start:
+                    raw_text = raw_text[arr_start:arr_end]
                 projects = json.loads(raw_text)
                 if isinstance(projects, list) and projects:
                     return projects[:max_projects]

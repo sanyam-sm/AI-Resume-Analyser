@@ -229,27 +229,18 @@ def clean_text(text: str) -> str:
 # =============================================================================
 
 def extract_email(text: str) -> str:
-    """
-    Extract email from raw text.
-    - Uses strict pattern requiring @ and valid TLD
-    - Filters social profile URLs that contain @
-    - Scans full text not just first line (handles two-column layouts
-      where email appears in right column)
-    """
     emails = re.findall(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', text)
-    # Filter social/platform URLs
+    # Filter only obvious social profile URLs and placeholder patterns
     emails = [e for e in emails if not any(
         s in e.lower() for s in ['linkedin', 'github', 'twitter', 'instagram',
-                                  'example.com', 'youremail', 'email.com']
+                                  'example.com', 'youremail@', 'test@']
     )]
-    # Prefer emails with common domains (gmail, yahoo, outlook, edu, org)
-    # over obscure ones — helps when multiple emails found
+    # Prefer common personal email domains
     preferred = [e for e in emails if any(
         d in e.lower() for d in ['gmail', 'yahoo', 'outlook', 'hotmail',
                                   '.edu', '.org', '.ac.in', '.co.in', 'iit', 'nit']
     )]
     return preferred[0] if preferred else (emails[0] if emails else "")
-
 
 def extract_phone(text: str) -> str:
     patterns = [

@@ -384,6 +384,74 @@
       text-align: center; margin-top: 20px;
     }
     .demo-strip span { color: var(--txt2); font-size: .85rem; margin-right: 8px; }
+
+    /* ── JD Match Section ─────────────────────────────────────────────────── */
+    #jd-section { margin-bottom: 20px; }
+    .jd-textarea {
+      width: 100%;
+      min-height: 150px;
+      background: var(--surface);
+      color: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      font-family: var(--font-b);
+      font-size: .9rem;
+      line-height: 1.5;
+      resize: vertical;
+      transition: border-color .2s;
+    }
+    .jd-textarea:focus {
+      outline: none;
+      border-color: var(--violet);
+    }
+    .jd-textarea::placeholder { color: var(--txt3); }
+    .jd-btn-row { display: flex; gap: 10px; margin-top: 14px; }
+    .jd-verdict-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .jd-verdict-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+    .jd-verdict-label { font-family: var(--font-h); font-size: 1.1rem; font-weight: 700; }
+    .jd-verdict-badge {
+      font-size: .72rem; font-weight: 600; padding: 4px 12px;
+      border-radius: 100px; text-transform: uppercase; letter-spacing: .04em;
+    }
+    .jd-verdict-desc { font-size: .88rem; color: var(--txt2); margin-bottom: 20px; }
+    .jd-breakdown-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 14px; }
+    .jd-breakdown-icon { font-size: 1rem; flex-shrink: 0; margin-top: 2px; }
+    .jd-breakdown-label { font-size: .82rem; font-weight: 600; color: var(--txt2); margin-bottom: 6px; }
+    .jd-breakdown-content { flex: 1; }
+    .jd-pill {
+      display: inline-block;
+      font-size: .78rem; font-weight: 500;
+      padding: 4px 10px; border-radius: 6px;
+      margin: 2px 4px 2px 0;
+    }
+    .jd-pill.green { background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.2); color: var(--emerald); }
+    .jd-pill.rose { background: rgba(244,63,94,.1); border: 1px solid rgba(244,63,94,.2); color: var(--rose); }
+    .jd-quick-win {
+      background: var(--surface);
+      border-left: 3px solid var(--violet);
+      border-radius: 0 8px 8px 0;
+      padding: 14px 16px;
+      margin-top: 16px;
+    }
+    .jd-quick-win-label {
+      font-size: .68rem; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--violet2); margin-bottom: 6px;
+    }
+    .jd-quick-win-text { font-size: .88rem; color: var(--txt); line-height: 1.5; }
+    .jd-inflation-card {
+      background: rgba(245,158,11,.06);
+      border: 1px solid rgba(245,158,11,.2);
+      border-radius: var(--r);
+      padding: 14px 16px;
+      margin-top: 16px;
+    }
+    .jd-inflation-title {
+      font-size: .82rem; font-weight: 700; color: var(--amber); margin-bottom: 8px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .jd-inflation-item { font-size: .82rem; color: var(--txt2); margin-bottom: 4px; }
+    .jd-inflation-note { font-size: .78rem; color: var(--txt3); margin-top: 8px; font-style: italic; }
   </style>
 </head>
 <body>
@@ -459,6 +527,29 @@
 
     <!-- Row 4: Extracted Details (education, experience, locations) -->
     <div class="card animate d5" id="card-ner-entities" style="margin-bottom:20px;"></div>
+
+    <!-- JD Match Section (hidden on load, shown after resume is analyzed) -->
+    <div id="jd-section" style="display:none;">
+      <!-- JD Input Card -->
+      <div class="card animate" id="card-jd-input" style="margin-bottom:20px;">
+        <div class="card-title"><span class="dot" style="background:var(--violet)"></span>Job Description Match</div>
+        <p style="font-size:.88rem;color:var(--txt2);margin-bottom:14px;">Paste a job description below to see how well your resume matches the requirements.</p>
+        <textarea class="jd-textarea" id="jd-textarea" placeholder="Paste job description here...&#10;&#10;Example:&#10;Requirements:&#10;- 3+ years of Python experience&#10;- Experience with machine learning frameworks (TensorFlow, PyTorch)&#10;- Strong SQL skills&#10;&#10;Nice to have:&#10;- Experience with cloud platforms (AWS, GCP)&#10;- Knowledge of Docker and Kubernetes"></textarea>
+        <div class="jd-btn-row">
+          <button class="btn btn-primary" id="jd-analyze-btn">Analyze Match</button>
+          <button class="btn btn-outline" id="jd-clear-btn">Clear</button>
+        </div>
+      </div>
+
+      <!-- JD Results Card (hidden until analysis) -->
+      <div class="card animate" id="card-jd-results" style="margin-bottom:20px;display:none;">
+        <div class="card-title"><span class="dot" style="background:var(--emerald)"></span>Match Analysis</div>
+        <div id="jd-verdict"></div>
+        <div id="jd-breakdown"></div>
+        <div id="jd-quick-win"></div>
+        <div id="jd-inflation-flags"></div>
+      </div>
+    </div>
 
     <!-- Row 5: Job Role Match + Skill Gaps -->
     <div class="grid-2">

@@ -46,6 +46,14 @@ resetBtn.addEventListener('click', () => {
   fileInfo.style.display = 'none';
   fileInfo.textContent = '';
   if (scoreChart) { scoreChart.destroy(); scoreChart = null; }
+
+  // Reset JD section
+  const jdSection = document.getElementById('jd-section');
+  const jdTextarea = document.getElementById('jd-textarea');
+  const jdResults = document.getElementById('card-jd-results');
+  if (jdSection) jdSection.style.display = 'none';
+  if (jdTextarea) jdTextarea.value = '';
+  if (jdResults) jdResults.style.display = 'none';
 });
 
 // ── Handle File ───────────────────────────────────────────────────────────────
@@ -114,6 +122,10 @@ function renderResults(data, meta = {}) {
   renderProjectIdeas(data);
   renderCourses(data);
   renderPdfPreview(data);
+
+  // Show JD Match section after resume is analyzed
+  const jdSection = document.getElementById('jd-section');
+  if (jdSection) jdSection.style.display = 'block';
 
   results.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -653,4 +665,179 @@ function escapeHtml(text) {
   const div       = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// ── JD Match Section ──────────────────────────────────────────────────────────
+const jdAnalyzeBtn = document.getElementById('jd-analyze-btn');
+const jdClearBtn   = document.getElementById('jd-clear-btn');
+const jdTextarea   = document.getElementById('jd-textarea');
+const jdResults    = document.getElementById('card-jd-results');
+
+if (jdAnalyzeBtn) {
+  jdAnalyzeBtn.addEventListener('click', async () => {
+    const jdText = jdTextarea?.value?.trim();
+
+    if (!jdText) {
+      showError('Please paste a job description first.');
+      return;
+    }
+
+    // Button loading state
+    jdAnalyzeBtn.disabled    = true;
+    jdAnalyzeBtn.textContent = 'Analyzing...';
+
+    try {
+      const res = await fetch('/api/jd-match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jd_text: jdText })
+      });
+
+      const data = await res.json();
+
+      if (data.status !== 'success') {
+        showError(data.message || 'JD analysis failed.');
+        jdAnalyzeBtn.disabled    = false;
+        jdAnalyzeBtn.textContent = 'Analyze Match';
+        return;
+      }
+
+      // Render results and show card
+      renderJDMatch(data);
+      jdResults.style.display = 'block';
+      jdResults.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    } catch (err) {
+      showError('Server error: ' + err.message);
+    }
+
+    jdAnalyzeBtn.disabled    = false;
+    jdAnalyzeBtn.textContent = 'Analyze Match';
+  });
+}
+
+if (jdClearBtn) {
+  jdClearBtn.addEventListener('click', () => {
+    if (jdTextarea) jdTextarea.value = '';
+    if (jdResults) jdResults.style.display = 'none';
+    if (jdAnalyzeBtn) jdAnalyzeBtn.textContent = 'Analyze Match';
+  });
+}
+
+function renderJDMatch(data) {
+  const verdictEl   = document.getElementById('jd-verdict');
+  const breakdownEl = document.getElementById('jd-breakdown');
+  const quickWinEl  = document.getElementById('jd-quick-win');
+  const inflationEl = document.getElementById('jd-inflation-flags');
+
+  if (!verdictEl || !breakdownEl || !quickWinEl || !inflationEl) return;
+
+  // Layer 1 — Verdict
+  const verdictConfig = {
+    strong_match:  { color: 'var(--emerald)', label: 'Strong Match',  desc: 'You meet most requirements and are a great fit for this role.' },
+    partial_match: { color: 'var(--amber)',   label: 'Partial Match', desc: 'You have relevant experience but some gaps exist.' },
+    stretch_role:  { color: 'var(--rose)',    label: 'Stretch Role',  desc: 'This role may require skills beyond your current profile.' },
+    not_suitable:  { color: '#64748b',        label: 'Low Match',     desc: 'Your profile may not align with this position.' }
+  };
+
+  const v = verdictConfig[data.verdict] || verdictConfig.not_suitable;
+  verdictEl.innerHTML = `
+    <div class="jd-verdict-row">
+      <span class="jd-verdict-dot" style="background:${v.color}"></span>
+      <span class="jd-verdict-label">${v.label}</span>
+      <span class="jd-verdict-badge" style="background:${v.color}20;border:1px solid ${v.color}40;color:${v.color}">${data.hard_coverage}% Match</span>
+    </div>
+    <div class="jd-verdict-desc">${v.desc}</div>`;
+
+  // Layer 2 — Breakdown
+  const breakdown = data.breakdown || {};
+  const directMatches  = breakdown.direct_matches  || [];
+  const impliedMatches = breakdown.implied_matches || [];
+  const genuineGaps    = breakdown.genuine_gaps    || [];
+  const expAligned     = breakdown.exp_aligned;
+  const resumeLevel    = breakdown.resume_level    || '—';
+  const jdLevel        = breakdown.jd_level        || '—';
+
+  let breakdownHtml = '';
+
+  // Row 1: Core skills met
+  if (directMatches.length > 0) {
+    const pills = directMatches.map(s => `<span class="jd-pill green">${escapeHtml(s)}</span>`).join('');
+    breakdownHtml += `
+      <div class="jd-breakdown-row">
+        <span class="jd-breakdown-icon" style="color:var(--emerald)">✓</span>
+        <div class="jd-breakdown-content">
+          <div class="jd-breakdown-label">Core skills met</div>
+          <div>${pills}</div>
+        </div>
+      </div>`;
+  }
+
+  // Row 2: Implied but not stated
+  if (impliedMatches.length > 0) {
+    const impliedText = impliedMatches.slice(0, 3).map(s =>
+      `Your resume implies "${escapeHtml(s)}" — consider adding it explicitly.`
+    ).join(' ');
+    breakdownHtml += `
+      <div class="jd-breakdown-row">
+        <span class="jd-breakdown-icon" style="color:var(--violet2)">ℹ</span>
+        <div class="jd-breakdown-content">
+          <div class="jd-breakdown-label">Implied but not stated</div>
+          <div style="font-size:.84rem;color:var(--txt)">${impliedText}</div>
+        </div>
+      </div>`;
+  }
+
+  // Row 3: Genuine gaps
+  if (genuineGaps.length > 0) {
+    const pills = genuineGaps.map(s => `<span class="jd-pill rose">${escapeHtml(s)}</span>`).join('');
+    breakdownHtml += `
+      <div class="jd-breakdown-row">
+        <span class="jd-breakdown-icon" style="color:var(--rose)">✗</span>
+        <div class="jd-breakdown-content">
+          <div class="jd-breakdown-label">Genuine gaps</div>
+          <div>${pills}</div>
+        </div>
+      </div>`;
+  }
+
+  // Row 4: Experience alignment
+  const expIcon  = expAligned ? '✓' : '⚠';
+  const expColor = expAligned ? 'var(--emerald)' : 'var(--amber)';
+  const expText  = expAligned
+    ? `Your experience level (${resumeLevel}) aligns with the role (${jdLevel}).`
+    : `Experience mismatch: Your level (${resumeLevel}) vs role requirement (${jdLevel}).`;
+  breakdownHtml += `
+    <div class="jd-breakdown-row">
+      <span class="jd-breakdown-icon" style="color:${expColor}">${expIcon}</span>
+      <div class="jd-breakdown-content">
+        <div class="jd-breakdown-label">Experience alignment</div>
+        <div style="font-size:.84rem;color:var(--txt)">${expText}</div>
+      </div>
+    </div>`;
+
+  breakdownEl.innerHTML = breakdownHtml;
+
+  // Layer 3 — Quick Win
+  quickWinEl.innerHTML = `
+    <div class="jd-quick-win">
+      <div class="jd-quick-win-label">Quick Win</div>
+      <div class="jd-quick-win-text">${escapeHtml(data.quick_win)}</div>
+    </div>`;
+
+  // Inflation flags (conditional)
+  const inflationFlags = data.inflation_flags || [];
+  if (inflationFlags.length > 0) {
+    const flagItems = inflationFlags.map(f =>
+      `<div class="jd-inflation-item">• ${escapeHtml(f.skill)}: ${f.required_years} years required, but ${escapeHtml(f.skill)} has only existed since ${f.tech_birth_year} (max ${f.max_possible} years).</div>`
+    ).join('');
+    inflationEl.innerHTML = `
+      <div class="jd-inflation-card">
+        <div class="jd-inflation-title">⚠ JD Quality Flags</div>
+        ${flagItems}
+        <div class="jd-inflation-note">Don't be discouraged — these requirements may be overstated.</div>
+      </div>`;
+  } else {
+    inflationEl.innerHTML = '';
+  }
 }

@@ -39,7 +39,7 @@ def _load_env(env_path='.env'):
 
 _load_env()
 
-from flask import Flask, request, jsonify, render_template, send_from_directory
+from flask import Flask, request, jsonify, render_template, send_from_directory, session
 import joblib
 import numpy as np
 
@@ -51,6 +51,7 @@ from utils.parser import (
     compute_job_matches, compute_skill_gaps,
     get_project_ideas,
     extract_skills_by_keyword, merge_skills,
+    compute_jd_match, generate_quick_win,
 )
 
 # ─── App Setup ────────────────────────────────────────────────────────────────
@@ -58,6 +59,7 @@ app = Flask(__name__, template_folder='templates', static_folder='static')
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 app.config['UPLOAD_FOLDER']      = Path('uploads')
 app.config['UPLOAD_FOLDER'].mkdir(exist_ok=True)
+app.secret_key = os.environ.get('SECRET_KEY', 'resume-analyzer-dev-key')
 
 ALLOWED         = {'pdf'}
 YOUTUBE_API_KEY = os.environ.get('YOUTUBE_API_KEY', '')
@@ -376,6 +378,9 @@ def api_analyze():
         if not raw_text.strip():
             return jsonify({'status': 'error', 'message': 'Could not extract text. Ensure the PDF is not a scanned image.'}), 422
 
+        # Store resume text in session for JD matching
+        session['resume_text'] = raw_text[:8000]
+
         pages      = count_pages(str(tmp_path))
         word_count = len(raw_text.split())
 
@@ -573,6 +578,54 @@ def api_demo():
         },
         'courses': demo_courses,
     })
+
+
+@app.route('/api/jd-match', methods=['POST'])
+def api_jd_match():
+    """Analyze resume against job description and return match analysis."""
+    try:
+        data = request.get_json()
+        jd_text = data.get('jd_text', '') if data else ''
+        resume_text = session.get('resume_text', '')
+
+        if not jd_text:
+            return jsonify({'status': 'error', 'message': 'Please paste a job description to analyze.'}), 400
+        if not resume_text:
+            return jsonify({'status': 'error', 'message': 'Please upload a resume first before analyzing JD match.'}), 400
+
+        # Compute match analysis
+        match_result = compute_jd_match(resume_text, jd_text)
+
+        # Generate quick win tip
+        quick_win = generate_quick_win(
+            resume_text,
+            match_result['genuine_gaps'],
+            match_result['implied_matches'],
+            jd_text,
+            match_result['verdict']
+        )
+
+        return jsonify({
+            'status': 'success',
+            'verdict': match_result['verdict'],
+            'hard_coverage': match_result['hard_coverage'],
+            'breakdown': {
+                'direct_matches': match_result['direct_matches'],
+                'implied_matches': match_result['implied_matches'],
+                'genuine_gaps': match_result['genuine_gaps'],
+                'exp_aligned': match_result['exp_aligned'],
+                'resume_level': match_result['resume_level'],
+                'jd_level': match_result['jd_level'],
+            },
+            'quick_win': quick_win,
+            'inflation_flags': match_result['inflation_flags'],
+            'preferred_gaps': match_result['preferred_gaps'],
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @app.route('/static/<path:filename>')

@@ -744,10 +744,9 @@ function renderJDMatch(data) {
   verdictEl.innerHTML = `
     <div class="jd-verdict-row">
       <span class="jd-verdict-dot" style="background:${v.color}"></span>
-      <span class="jd-verdict-label">${v.label}</span>
-      <span class="jd-verdict-badge" style="background:${v.color}20;border:1px solid ${v.color}40;color:${v.color}">${data.hard_coverage}% Match</span>
+      <span class="jd-verdict-label" style="color:${v.color}; font-weight:bold; font-size: 1.2rem;">${v.label}</span>
     </div>
-    <div class="jd-verdict-desc">${v.desc}</div>`;
+    <div class="jd-verdict-desc" style="margin-top: 8px;">${v.desc}</div>`;
 
   // Layer 2 — Breakdown
   const breakdown = data.breakdown || {};

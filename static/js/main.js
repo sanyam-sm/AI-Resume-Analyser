@@ -10,6 +10,227 @@ const resetBtn    = document.getElementById('reset-btn');
 const demoBtn     = document.getElementById('demo-btn');
 
 let scoreChart = null;
+let jobsState = { linkedin: [], indeed: [], processed: { linkedin: 0, indeed: 0 } };
+let userLocation = { city: '', country: 'us' };
+
+// City to nearby cities mapping
+const NEARBY_CITIES = {
+  'hyderabad': ['Hyderabad', 'Bangalore', 'Chennai', 'Visakhapatnam', 'Pune'],
+  'bangalore': ['Bangalore', 'Hyderabad', 'Chennai', 'Pune', 'Mysore'],
+  'chennai': ['Chennai', 'Bangalore', 'Hyderabad', 'Coimbatore', 'Pune'],
+  'delhi': ['Delhi', 'Noida', 'Gurgaon', 'Faridabad', 'Jaipur', 'Greater Noida'],
+  'noida': ['Noida', 'Delhi', 'Gurgaon', 'Faridabad', 'Greater Noida', 'Jaipur'],
+  'gurgaon': ['Gurgaon', 'Delhi', 'Noida', 'Faridabad', 'Jaipur', 'Greater Noida'],
+  'mumbai': ['Mumbai', 'Pune', 'Ahmedabad', 'Surat', 'Nagpur'],
+  'pune': ['Pune', 'Mumbai', 'Bangalore', 'Hyderabad', 'Nashik', 'Aurangabad'],
+  'ahmedabad': ['Ahmedabad', 'Surat', 'Vadodara', 'Mumbai', 'Rajkot'],
+  'kolkata': ['Kolkata', 'Bhubaneswar', 'Ranchi', 'Patna', 'Asansol'],
+  'bangalore': ['Bangalore', 'Hyderabad', 'Mysore', 'Chennai', 'Pune', 'Madurai'],
+  'mysore': ['Mysore', 'Bangalore', 'Coimbatore', 'Chennai', 'Hassan'],
+  'coimbatore': ['Coimbatore', 'Chennai', 'Bangalore', 'Mysore', 'Salem'],
+  'jaipur': ['Jaipur', 'Delhi', 'Agra', 'Udaipur', 'Ajmer'],
+  'chandigarh': ['Chandigarh', 'Mohali', 'Panchkula', 'Zirakpur', 'Kharar'],
+  'toronto': ['Toronto', 'Mississauga', 'Brampton', 'Hamilton', 'Markham', 'Vaughan'],
+  'vancouver': ['Vancouver', 'Burnaby', 'Surrey', 'Richmond', 'Coquitlam'],
+  'new york': ['New York', 'Newark', 'Jersey City', 'Yonkers', 'New Rochelle'],
+  'los angeles': ['Los Angeles', 'Long Beach', 'Anaheim', 'Santa Ana', 'Irvine'],
+  'london': ['London', 'Manchester', 'Birmingham', 'Leeds', 'Bristol'],
+  'san francisco': ['San Francisco', 'Oakland', 'San Jose', 'Palo Alto', 'Mountain View'],
+  'seattle': ['Seattle', 'Bellevue', 'Redmond', 'Renton', 'Kent'],
+  'austin': ['Austin', 'Round Rock', 'Cedar Park', 'Pflugerville', 'Georgetown'],
+  'singapore': ['Singapore'],
+  'dubai': ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman'],
+};
+
+function getNearbyCities(city) {
+  if (!city) return [];
+  const normalized = city.toLowerCase().trim();
+
+  // Direct match
+  if (NEARBY_CITIES[normalized]) {
+    return NEARBY_CITIES[normalized];
+  }
+
+  // Partial match (e.g., user types "Delhi" and we find "delhi")
+  for (const [key, cities] of Object.entries(NEARBY_CITIES)) {
+    if (normalized.includes(key) || key.includes(normalized)) {
+      return cities;
+    }
+  }
+
+  // If no matches, return the city itself
+  return [city];
+}
+
+async function getUserLocation() {
+  if (!navigator.geolocation) {
+    console.log('[LOCATION] Geolocation not supported by browser');
+    return null;
+  }
+  return new Promise(resolve => {
+    navigator.geolocation.getCurrentPosition(
+      async pos => {
+        const { latitude, longitude } = pos.coords;
+        console.log(`[LOCATION] Got coordinates: ${latitude}, ${longitude}`);
+        try {
+          const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`);
+          const j = await r.json();
+          const city = j?.address?.city || j?.address?.town || j?.address?.village || '';
+          const countryCode = (j?.address?.country_code || 'us').toLowerCase();
+          console.log(`[LOCATION] Detected: ${city}, ${countryCode}`);
+          resolve({ city, country: countryCode });
+        } catch (err) {
+          console.warn('[LOCATION] Reverse geocoding failed:', err);
+          resolve({ city: '', country: 'us' });
+        }
+      },
+      err => {
+        console.warn('[LOCATION] Permission denied or error:', err.message);
+        resolve(null);
+      },
+      { enableHighAccuracy: false, timeout: 6000, maximumAge: 600000 }
+    );
+  });
+}
+
+// ── Location Modal Handler ────────────────────────────────────────────────────────
+function initLocationModal() {
+  const modal = document.getElementById('location-modal');
+  const detectBtn = document.getElementById('detect-location-btn');
+  const skipBtn = document.getElementById('skip-location-btn');
+  const confirmBtn = document.getElementById('confirm-location-btn');
+  const manualInput = document.getElementById('manual-location-input');
+
+  if (!modal) return;
+
+  // Don't show on load - only on demand via "Find Jobs" button
+  modal.style.display = 'none';
+
+  // Detect location button
+  if (detectBtn) {
+    detectBtn.addEventListener('click', async () => {
+      detectBtn.disabled = true;
+      detectBtn.textContent = '🔍 Detecting...';
+      const loc = await getUserLocation();
+      if (loc && loc.city) {
+        manualInput.value = loc.city;
+        userLocation = loc;
+        const nearbyCities = getNearbyCities(loc.city);
+        const displayCities = nearbyCities.slice(0, 5).join(', ') + (nearbyCities.length > 5 ? ', ...' : '');
+        console.log(`[LOCATION] Detected: ${loc.city} → Searching in: ${displayCities}`);
+        modal.style.display = 'none';
+        startJobSearch();
+      } else {
+        detectBtn.disabled = false;
+        detectBtn.textContent = '🎯 Detect Location';
+        alert('Could not detect location. Please enter manually or skip.');
+      }
+    });
+  }
+
+  // Skip button
+  if (skipBtn) {
+    skipBtn.addEventListener('click', () => {
+      console.log('[LOCATION] Skipped → Searching globally without location filter');
+      userLocation = { city: '', country: 'us' };
+      modal.style.display = 'none';
+      startJobSearch();
+    });
+  }
+
+  // Confirm button
+  if (confirmBtn) {
+    confirmBtn.addEventListener('click', () => {
+      const location = manualInput.value.trim();
+      if (location) {
+        const nearbyCities = getNearbyCities(location);
+        const displayCities = nearbyCities.slice(0, 5).join(', ') + (nearbyCities.length > 5 ? ', ...' : '');
+        console.log(`[LOCATION] Confirmed: ${location} → Searching in: ${displayCities}`);
+        userLocation = { city: location, country: 'us' };
+      } else {
+        userLocation = { city: '', country: 'us' };
+      }
+      modal.style.display = 'none';
+      startJobSearch();
+    });
+  }
+
+  // Allow Enter key to confirm
+  if (manualInput) {
+    manualInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter' && confirmBtn) confirmBtn.click();
+    });
+  }
+}
+
+// Show location modal on Find Jobs button click
+function attachFindJobsButton() {
+  const btn = document.getElementById('find-jobs-btn');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      const modal = document.getElementById('location-modal');
+      if (modal) {
+        modal.style.display = 'flex';
+        document.getElementById('manual-location-input').value = userLocation.city || '';
+      }
+    });
+  }
+}
+
+async function startJobSearch() {
+  const jobsGrid = document.getElementById('jobs-grid');
+  const feed = document.getElementById('apply-progress-feed');
+  const findBtn = document.getElementById('find-jobs-btn');
+
+  if (findBtn) findBtn.disabled = true;
+  if (feed) feed.innerHTML = '<div>📍 Searching for jobs...</div>';
+  if (jobsGrid) jobsGrid.innerHTML = Array.from({ length: 6 }).map(() => '<div class="skeleton"></div>').join('');
+
+  const cityInput = userLocation?.city || '';
+  const country = userLocation?.country || 'us';
+
+  // Get nearby cities
+  const nearbyCities = getNearbyCities(cityInput);
+  const locationQuery = nearbyCities.join(' OR ');
+
+  if (locationQuery) {
+    if (feed) feed.innerHTML = `<div>🔌 Searching for jobs in ${nearbyCities.slice(0, 3).join(', ')}${nearbyCities.length > 3 ? ' & more...' : ''}...</div>`;
+  } else {
+    if (feed) feed.innerHTML = '<div>🔌 Searching jobs globally...</div>';
+  }
+
+  try {
+    const res = await fetch(
+      `/api/jobs?location=${encodeURIComponent(locationQuery)}&country=${encodeURIComponent(country)}`
+    );
+    const payload = await res.json();
+    if (payload.status === 'setup_required') {
+      const grid = document.getElementById('jobs-grid');
+      if (grid) grid.innerHTML = `<div class="empty-state">${escapeHtml(payload.message)}</div>`;
+      if (feed) feed.innerHTML = '<div>🛠 API key setup required.</div>';
+      return;
+    }
+    if (payload.status !== 'success') throw new Error(payload.message || 'Could not fetch jobs');
+    
+    const jobs = payload.jobs || [];
+    const linkedinCount = payload.linkedin_count || 0;
+    renderJobs(jobs, linkedinCount);
+
+    if (feed) feed.innerHTML = `<div>✅ Found ${jobs.length} jobs (${linkedinCount} LinkedIn). Click cards to select, then apply!</div>`;
+  } catch (err) {
+    const grid = document.getElementById('jobs-grid');
+    if (grid) grid.innerHTML = `<div class="empty-state">Failed to load jobs: ${escapeHtml(err.message)}</div>`;
+    if (feed) feed.innerHTML = `<div>❌ ${escapeHtml(err.message)}</div>`;
+  } finally {
+    if (findBtn) findBtn.disabled = false;
+  }
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', () => {
+  initLocationModal();
+  attachFindJobsButton();
+});
 
 // ── Drag & Drop ──────────────────────────────────────────────────────────────
 uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
@@ -54,6 +275,23 @@ resetBtn.addEventListener('click', () => {
   if (jdSection) jdSection.style.display = 'none';
   if (jdTextarea) jdTextarea.value = '';
   if (jdResults) jdResults.style.display = 'none';
+  
+  // Reset jobs section completely
+  const jobsSection = document.getElementById('jobs-section');
+  if (jobsSection) jobsSection.style.display = 'none';
+  const jobsGrid = document.getElementById('jobs-grid');
+  if (jobsGrid) jobsGrid.innerHTML = '';
+  const selectionBar = document.getElementById('selection-bar');
+  if (selectionBar) selectionBar.style.display = 'none';
+  const progressFeed = document.getElementById('apply-progress-feed');
+  if (progressFeed) progressFeed.innerHTML = '';
+  const totalCount = document.getElementById('jobs-total-count');
+  if (totalCount) totalCount.textContent = '0 jobs';
+  const linkedinBadge = document.getElementById('linkedin-badge');
+  if (linkedinBadge) linkedinBadge.textContent = '0 LinkedIn';
+  
+  // Reset jobs state
+  jobsState = { allJobs: [], processed: {} };
 });
 
 // ── Handle File ───────────────────────────────────────────────────────────────
@@ -122,6 +360,7 @@ function renderResults(data, meta = {}) {
   renderProjectIdeas(data);
   renderCourses(data);
   renderPdfPreview(data);
+  loadJobsFromAnalysis(data);
 
   // Show JD Match section after resume is analyzed
   const jdSection = document.getElementById('jd-section');
@@ -840,3 +1079,283 @@ function renderJDMatch(data) {
     inflationEl.innerHTML = '';
   }
 }
+
+async function loadJobsFromAnalysis(data) {
+  const jobsSection = document.getElementById('jobs-section');
+  if (!jobsSection) return;
+
+  jobsSection.style.display = 'block';
+
+  // Show the button to find jobs - don't auto-load
+  const feed = document.getElementById('apply-progress-feed');
+  if (feed) feed.innerHTML = '<div>📍 Click "Find Jobs Near You" to search for opportunities</div>';
+}
+
+function matchBarColor(pct) {
+  if (pct > 70) return 'linear-gradient(90deg, var(--emerald), #34d399)';
+  if (pct >= 40) return 'linear-gradient(90deg, var(--amber), #fcd34d)';
+  return 'linear-gradient(90deg, var(--rose), #fb7185)';
+}
+
+function getPlatformClass(platform) {
+  const p = (platform || '').toLowerCase();
+  if (p.includes('linkedin')) return 'linkedin';
+  if (p.includes('indeed')) return 'indeed';
+  if (p.includes('glassdoor')) return 'glassdoor';
+  if (p.includes('ziprecruiter')) return 'ziprecruiter';
+  return 'other';
+}
+
+function updateSelectionBar() {
+  const cards = [...document.querySelectorAll('.job-card.selected')];
+  const count = cards.length;
+  const linkedinCount = cards.filter(c => c.dataset.platform?.toLowerCase() === 'linkedin').length;
+  
+  const bar = document.getElementById('selection-bar');
+  const countEl = document.getElementById('selection-count');
+  
+  if (count === 0) {
+    bar.style.display = 'none';
+  } else {
+    bar.style.display = 'flex';
+    const linkedinNote = linkedinCount > 0 ? ` (${linkedinCount} LinkedIn)` : '';
+    countEl.textContent = `${count} job${count !== 1 ? 's' : ''} selected${linkedinNote}`;
+  }
+  
+  // Enable/disable assisted/automated buttons based on LinkedIn selection
+  const assistedBtn = document.getElementById('assisted-apply-btn');
+  const automatedBtn = document.getElementById('automated-apply-btn');
+  if (assistedBtn) assistedBtn.disabled = linkedinCount === 0;
+  if (automatedBtn) automatedBtn.disabled = linkedinCount === 0;
+}
+
+function toggleJobSelection(card) {
+  card.classList.toggle('selected');
+  updateSelectionBar();
+}
+
+function renderJobs(jobs, linkedinCount) {
+  const grid = document.getElementById('jobs-grid');
+  const totalEl = document.getElementById('jobs-total-count');
+  const linkedinBadge = document.getElementById('linkedin-badge');
+  
+  if (!grid) return;
+  
+  totalEl.textContent = `${jobs.length} jobs`;
+  linkedinBadge.textContent = `${linkedinCount} LinkedIn`;
+  
+  if (!jobs.length) {
+    grid.innerHTML = '<div class="empty-state">No jobs found. Try different search criteria.</div>';
+    return;
+  }
+  
+  grid.innerHTML = jobs.map((job, idx) => {
+    const platform = job.source_platform || 'Other';
+    const platformClass = getPlatformClass(platform);
+    return `
+    <div class="job-card" data-index="${idx}" data-platform="${platform}" onclick="toggleJobSelection(this)">
+      <div class="job-title">${escapeHtml(job.job_title)}</div>
+      <div class="job-company">${escapeHtml(job.company_name)}</div>
+      <div class="job-location">📍 ${escapeHtml(job.location)}</div>
+      <div class="job-meta">
+        <span class="platform-badge ${platformClass}">${escapeHtml(platform)}</span>
+        <span class="applied-badge">✓ Applied</span>
+      </div>
+      <div class="match-wrap">
+        <div class="match-label">Match ${job.match_percentage}%</div>
+        <div class="match-bar-bg"><div class="match-bar-fill" style="width:${Math.min(job.match_percentage, 100)}%;background:${matchBarColor(job.match_percentage)}"></div></div>
+      </div>
+      <div class="job-actions" onclick="event.stopPropagation()">
+        <a class="btn btn-outline btn-sm" href="${job.apply_url}" target="_blank" rel="noopener">Apply ↗</a>
+      </div>
+    </div>
+  `}).join('');
+  
+  // Store jobs in state
+  jobsState.allJobs = jobs;
+  updateSelectionBar();
+}
+
+function getSelectedJobs() {
+  const jobs = jobsState.allJobs || [];
+  const cards = [...document.querySelectorAll('.job-card.selected')];
+  return cards.map(card => jobs[parseInt(card.dataset.index)]).filter(Boolean);
+}
+
+function getSelectedLinkedInJobs() {
+  return getSelectedJobs().filter(job => 
+    (job.source_platform || '').toLowerCase() === 'linkedin'
+  );
+}
+
+function showProgress(message, done = false) {
+  const bar = document.getElementById('apply-progress-bar');
+  const text = document.getElementById('apply-progress-text');
+  if (!bar || !text) return;
+  
+  if (done) {
+    bar.style.display = 'none';
+  } else {
+    bar.style.display = 'block';
+    text.textContent = message;
+  }
+}
+
+function markAppliedByTitleCompany(title, company) {
+  const cards = [...document.querySelectorAll('.job-card')];
+  cards.forEach(card => {
+    const t = card.querySelector('.job-title')?.textContent?.trim();
+    const c = card.querySelector('.job-company')?.textContent?.trim();
+    if (t === title && c === company) {
+      const badge = card.querySelector('.applied-badge');
+      if (badge) badge.style.display = 'inline-flex';
+      card.classList.remove('selected');
+    }
+  });
+  updateSelectionBar();
+}
+
+async function openSelectedInTabs() {
+  const jobs = getSelectedJobs();
+  if (!jobs.length) {
+    showProgress('⚠ No jobs selected.');
+    setTimeout(() => showProgress('', true), 2000);
+    return;
+  }
+  
+  showProgress(`Opening ${jobs.length} jobs in new tabs...`);
+  let opened = 0;
+  for (const job of jobs) {
+    if (job.apply_url) {
+      window.open(job.apply_url, '_blank');
+      opened++;
+      await new Promise(r => setTimeout(r, 300));
+    }
+  }
+  showProgress(`✅ Opened ${opened} jobs in your browser`);
+  setTimeout(() => showProgress('', true), 3000);
+}
+
+let pendingAutoApply = null;
+
+async function runAutoApply(mode, riskAcknowledged) {
+  const linkedinJobs = getSelectedLinkedInJobs();
+  if (!linkedinJobs.length) {
+    showProgress('⚠ No LinkedIn jobs selected. Select LinkedIn jobs first.');
+    setTimeout(() => showProgress('', true), 3000);
+    return;
+  }
+
+  showProgress(`Starting ${mode} apply for ${linkedinJobs.length} LinkedIn jobs...`);
+  
+  try {
+    const res = await fetch('/api/auto-apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobs: linkedinJobs, mode, risk_acknowledged: riskAcknowledged })
+    });
+    
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showProgress(`❌ ${data.message || 'Auto-apply request failed.'}`);
+      setTimeout(() => showProgress('', true), 5000);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let appliedCount = 0;
+    const totalJobs = linkedinJobs.length;
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop();
+      for (const evt of events) {
+        const line = evt.split('\n').find(l => l.startsWith('data: '));
+        if (!line) continue;
+        try {
+          const payload = JSON.parse(line.slice(6));
+          const status = payload.status || '';
+          const title = payload.job_title || '';
+          const company = payload.company || '';
+          const message = payload.message || '';
+          
+          if (status === 'connecting') showProgress(`🔌 ${message}`);
+          else if (status === 'opening') showProgress(`📂 Opening: ${title} @ ${company}`);
+          else if (status === 'filled') { 
+            appliedCount++;
+            showProgress(`✅ Filled ${appliedCount}/${totalJobs}: ${title}`);
+            markAppliedByTitleCompany(title, company);
+          }
+          else if (status === 'applied') { 
+            appliedCount++;
+            showProgress(`🚀 Applied ${appliedCount}/${totalJobs}: ${title}`);
+            markAppliedByTitleCompany(title, company);
+          }
+          else if (status === 'skipped') showProgress(`⏭ Skipped: ${title} (${payload.reason || 'N/A'})`);
+          else if (status === 'failed') {
+            showProgress(`❌ ${message || title || 'Error occurred'}`);
+          }
+          else if (status === 'done') {
+            showProgress(`🏁 Done! Applied to ${appliedCount} jobs.`);
+            setTimeout(() => showProgress('', true), 5000);
+          }
+        } catch (e) {
+          console.error('Error parsing SSE:', e);
+        }
+      }
+    }
+  } catch (e) {
+    showProgress(`❌ Error: ${e.message}`);
+    setTimeout(() => showProgress('', true), 5000);
+  }
+}
+
+function attachApplyButtons() {
+  // Select ALL jobs
+  const selectAllBtn = document.getElementById('select-all-jobs');
+  if (selectAllBtn) {
+    selectAllBtn.addEventListener('click', () => {
+      document.querySelectorAll('.job-card').forEach(card => {
+        card.classList.add('selected');
+      });
+      updateSelectionBar();
+    });
+  }
+  
+  // Select all LinkedIn jobs
+  const selectAllLinkedinBtn = document.getElementById('select-all-linkedin');
+  if (selectAllLinkedinBtn) {
+    selectAllLinkedinBtn.addEventListener('click', () => {
+      document.querySelectorAll('.job-card').forEach(card => {
+        if (card.dataset.platform?.toLowerCase() === 'linkedin') {
+          card.classList.add('selected');
+        }
+      });
+      updateSelectionBar();
+    });
+  }
+  
+  // Clear selection
+  const clearBtn = document.getElementById('clear-selection');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      document.querySelectorAll('.job-card.selected').forEach(card => {
+        card.classList.remove('selected');
+      });
+      updateSelectionBar();
+    });
+  }
+  
+  // Open selected in tabs
+  const openSelectedBtn = document.getElementById('open-selected-btn');
+  if (openSelectedBtn) {
+    openSelectedBtn.addEventListener('click', openSelectedInTabs);
+  }
+}
+
+attachApplyButtons();

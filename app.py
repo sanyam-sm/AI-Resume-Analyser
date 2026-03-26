@@ -18,6 +18,10 @@ import re
 import json
 import base64
 import uuid
+import time
+import atexit
+import signal
+import sys
 import requests
 from pathlib import Path
 
@@ -39,7 +43,7 @@ def _load_env(env_path='.env'):
 
 _load_env()
 
-from flask import Flask, request, jsonify, render_template, send_from_directory, session
+from flask import Flask, request, jsonify, render_template, send_from_directory, session, Response, stream_with_context
 import joblib
 import numpy as np
 
@@ -63,7 +67,56 @@ app.secret_key = os.environ.get('SECRET_KEY', 'resume-analyzer-dev-key')
 
 ALLOWED         = {'pdf'}
 YOUTUBE_API_KEY = os.environ.get('YOUTUBE_API_KEY', '')
+JSEARCH_API_KEY = os.environ.get('JSEARCH_API_KEY', '')
 MODEL_DIR       = Path(r'notebooks\models')
+UPLOAD_TTL_SECONDS = 3 * 60 * 60
+_LAST_UPLOAD_CLEANUP_CHECK = 0.0
+_SHUTDOWN_IN_PROGRESS = False
+
+
+def _cleanup_expired_uploads(max_age_seconds: int = UPLOAD_TTL_SECONDS) -> int:
+    now = time.time()
+    removed = 0
+    for pdf in app.config['UPLOAD_FOLDER'].glob('*.pdf'):
+        try:
+            if now - pdf.stat().st_mtime > max_age_seconds:
+                pdf.unlink()
+                removed += 1
+        except FileNotFoundError:
+            continue
+    return removed
+
+
+def _cleanup_all_uploads() -> int:
+    removed = 0
+    for pdf in app.config['UPLOAD_FOLDER'].glob('*.pdf'):
+        try:
+            pdf.unlink()
+            removed += 1
+        except FileNotFoundError:
+            continue
+    return removed
+
+
+def _graceful_shutdown_cleanup(*_args):
+    global _SHUTDOWN_IN_PROGRESS
+    if _SHUTDOWN_IN_PROGRESS:
+        return
+    _SHUTDOWN_IN_PROGRESS = True
+
+    removed = _cleanup_all_uploads()
+    if removed:
+        print(f"  Graceful shutdown cleanup removed {removed} upload file(s)")
+    print("  Shutting down...")
+    sys.exit(0)
+
+
+atexit.register(_graceful_shutdown_cleanup)
+try:
+    signal.signal(signal.SIGTERM, _graceful_shutdown_cleanup)
+    signal.signal(signal.SIGINT, _graceful_shutdown_cleanup)
+except Exception:
+    pass
 
 
 def load_models():
@@ -107,6 +160,62 @@ print(f"  Gemini API  : {'configured ✓ (edu/exp extraction)' if os.environ.get
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED
+
+
+def _build_job_search_query(category: str, skills: list, top_categories: list = None) -> str:
+    clean_category = (category or '').strip()
+    clean_skills = [str(s).strip() for s in (skills or []) if str(s).strip()]
+    top_skills = clean_skills[:2]
+    top_categories = [str(c).strip() for c in (top_categories or []) if str(c).strip()]
+    picked_categories = [clean_category] if clean_category else []
+    for c in top_categories:
+        if c.lower() not in {x.lower() for x in picked_categories}:
+            picked_categories.append(c)
+        if len(picked_categories) >= 2:
+            break
+    category_part = ' OR '.join(picked_categories)
+    if category_part and top_skills:
+        return f"{category_part} {' '.join(top_skills)} jobs"
+    if category_part:
+        return f"{category_part} jobs"
+    if top_skills:
+        return f"{' '.join(top_skills)} jobs"
+    return "software engineer"
+
+
+def _normalize_job_source(publisher: str) -> str:
+    publisher_l = (publisher or '').lower()
+    if 'linkedin' in publisher_l:
+        return 'LinkedIn'
+    if 'indeed' in publisher_l:
+        return 'Indeed'
+    return ''
+
+
+def _job_match_pct(user_skills: list, title: str, description: str) -> int:
+    skill_set = {str(s).lower().strip() for s in (user_skills or []) if str(s).strip()}
+    if not skill_set:
+        return 0
+    haystack = f"{title or ''} {description or ''}".lower()
+    overlap = sum(1 for skill in skill_set if skill in haystack)
+    return int(round((overlap / len(skill_set)) * 100))
+
+
+def _format_job_item(job: dict, user_skills: list, source: str) -> dict:
+    city = (job.get('job_city') or '').strip()
+    country = (job.get('job_country') or '').strip()
+    location = ', '.join([v for v in [city, country] if v]) or (job.get('job_location') or 'Location not specified')
+    title = job.get('job_title') or 'Untitled role'
+    description = job.get('job_description') or ''
+    match_percentage = _job_match_pct(user_skills, title, description)
+    return {
+        'job_title': title,
+        'company_name': job.get('employer_name') or 'Unknown company',
+        'location': location,
+        'match_percentage': match_percentage,
+        'apply_url': job.get('job_apply_link') or job.get('job_google_link') or '',
+        'source_platform': source,
+    }
 
 
 # ─── Course Recommendations ───────────────────────────────────────────────────
@@ -362,6 +471,12 @@ def api_model_info():
 
 @app.route('/api/analyze', methods=['POST'])
 def api_analyze():
+    global _LAST_UPLOAD_CLEANUP_CHECK
+    now = time.time()
+    if now - _LAST_UPLOAD_CLEANUP_CHECK > 300:
+        _cleanup_expired_uploads()
+        _LAST_UPLOAD_CLEANUP_CHECK = now
+
     if 'resume' not in request.files:
         return jsonify({'status': 'error', 'message': 'No file provided.'}), 400
     file = request.files['resume']
@@ -456,6 +571,22 @@ def api_analyze():
         with open(tmp_path, 'rb') as f:
             pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
 
+        resume_payload = {
+            'name': name,
+            'email': email,
+            'phone': phone,
+            'category': predicted_category,
+            'skills': [s['text'] if isinstance(s, dict) else s for s in skill_items],
+            'years_of_experience': ner_results.get('years_of_experience', ''),
+            'experience_entries': ner_results.get('experience_entries', []),
+            'education_entries': ner_results.get('education_entries', []),
+            'uploaded_pdf_path': str(tmp_path),
+            'uploaded_pdf_name': file.filename,
+        }
+        session['resume_apply_data'] = resume_payload
+        session['uploaded_resume_path'] = str(tmp_path)
+        session['job_matches'] = job_matches
+
         return jsonify({
             'status'   : 'success',
             'extracted': {
@@ -495,8 +626,194 @@ def api_analyze():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
     finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
+        pass
+
+
+@app.route('/api/cleanup-resume', methods=['POST'])
+def api_cleanup_resume():
+    _cleanup_expired_uploads()
+    resume_path = session.get('uploaded_resume_path')
+    deleted = False
+    if resume_path:
+        p = Path(resume_path)
+        if p.exists():
+            p.unlink()
+            deleted = True
+    session.pop('uploaded_resume_path', None)
+    session.pop('resume_apply_data', None)
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+
+@app.route('/api/cleanup-uploads', methods=['POST'])
+def api_cleanup_uploads():
+    removed = _cleanup_all_uploads()
+    session.pop('uploaded_resume_path', None)
+    session.pop('resume_apply_data', None)
+    return jsonify({'status': 'success', 'deleted_count': removed})
+
+
+@app.route('/api/jobs')
+def api_jobs():
+    try:
+        location = request.args.get('location', '').strip()
+        country = request.args.get('country', 'us').strip().lower() or 'us'
+
+        if not JSEARCH_API_KEY:
+            return jsonify({
+                'status': 'setup_required',
+                'message': 'JSEARCH_API_KEY is missing. Add it to your .env file and restart the app.',
+                'linkedin_jobs': [],
+                'indeed_jobs': [],
+            }), 200
+
+        resume_data = session.get('resume_apply_data')
+        if not resume_data:
+            return jsonify({'status': 'error', 'message': 'No resume data in session. Analyze a resume first.'}), 400
+
+        category = resume_data.get('category', 'Software Engineer')
+        job_matches_data = session.get('job_matches')
+        best_role = job_matches_data[0]['role'] if job_matches_data and len(job_matches_data) > 0 else 'Developer'
+
+        query = f"{best_role} OR {category}"
+        print(f"[JOB SEARCH] Query: {query}, Location: {location or 'Not specified'}, Country: {country}")
+
+        endpoint = "https://jsearch.p.rapidapi.com/search"
+        headers = {
+            'x-rapidapi-key': JSEARCH_API_KEY,
+            'x-rapidapi-host': 'jsearch.p.rapidapi.com',
+        }
+
+        collected_linkedin = []
+        collected_indeed = []
+        skills = resume_data.get('skills', [])
+
+        # Parse cities if there are multiple (separated by OR)
+        cities = [c.strip() for c in location.split(' OR ')] if location else ['']
+        print(f"[JOB SEARCH] Searching in cities: {cities}")
+
+        for city in cities:
+            if len(collected_linkedin) >= 30:  # Only LinkedIn, max 30 jobs
+                break
+
+            page = 1
+            max_pages = 1  # Only 1 page per city
+
+            while page <= max_pages and len(collected_linkedin) < 30:
+                params = {
+                    'query': query,
+                    'page': page,
+                    'num_pages': 1,
+                    'date_posted': 'week',
+                }
+
+                # Add location (single city, not OR-separated)
+                if city:
+                    params['query'] = f"{query} in {city}"
+                    print(f"[JOB SEARCH] Fetching page {page} for city: {city}")
+
+                # Add country only if specified
+                if country:
+                    params['country'] = country
+
+                # Retry logic for network issues
+                max_retries = 2
+                for attempt in range(max_retries):
+                    try:
+                        response = requests.get(endpoint, headers=headers, params=params, timeout=(5, 20))
+                        break
+                    except requests.exceptions.ReadTimeout:
+                        if attempt < max_retries - 1:
+                            print(f"[JOB SEARCH] Timeout on attempt {attempt + 1}, retrying...")
+                            time.sleep(1)
+                            continue
+                        else:
+                            print(f"[JOB SEARCH ERROR] All retry attempts exhausted (timeout)")
+                            continue
+                    except requests.exceptions.RequestException as e:
+                        print(f"[JOB SEARCH ERROR] Network error: {str(e)}")
+                        continue
+
+                if response.status_code != 200:
+                    print(f"[JOB SEARCH ERROR] JSearch API returned {response.status_code}: {response.text[:200]}")
+                    page += 1
+                    continue
+
+                payload = response.json()
+                jobs = payload.get('data', [])
+                if not jobs:
+                    print(f"[JOB SEARCH] No jobs found in {city} on page {page}")
+                    break
+
+                print(f"[JOB SEARCH] Found {len(jobs)} jobs in {city} on page {page}")
+
+                for job in jobs:
+                    if len(collected_linkedin) >= 50:
+                        break
+                    source = _normalize_job_source(job.get('job_publisher'))
+                    formatted_job = _format_job_item(job, skills, source or job.get('job_publisher', 'Other'))
+                    collected_linkedin.append(formatted_job)
+
+                page += 1
+
+        # Sort: LinkedIn first, then by match percentage
+        def sort_key(j):
+            is_linkedin = 1 if j.get('source_platform', '').lower() == 'linkedin' else 0
+            return (is_linkedin, j.get('match_percentage', 0))
+        
+        collected_linkedin.sort(key=sort_key, reverse=True)
+
+        linkedin_count = sum(1 for j in collected_linkedin if j.get('source_platform', '').lower() == 'linkedin')
+        print(f"[JOB SEARCH] Found {len(collected_linkedin)} total jobs ({linkedin_count} LinkedIn)")
+        return jsonify({
+            'status': 'success',
+            'query': query,
+            'jobs': collected_linkedin[:50],
+            'linkedin_count': linkedin_count,
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': f'Failed to fetch jobs: {str(e)}'}), 502
+
+
+@app.route('/api/auto-apply', methods=['POST'])
+def api_auto_apply():
+    """Assisted/Automated apply using browser automation with user's logged-in session."""
+    data = request.get_json() or {}
+    jobs = data.get('jobs') or []
+    mode = (data.get('mode') or 'assisted').strip().lower()
+    acknowledged = bool(data.get('risk_acknowledged', False))
+
+    if mode not in {'assisted', 'automated'}:
+        return jsonify({'status': 'error', 'message': 'mode must be "assisted" or "automated".'}), 400
+    if mode == 'automated' and not acknowledged:
+        return jsonify({'status': 'error', 'message': 'Risk acknowledgement required for automated mode.'}), 400
+
+    resume_data = session.get('resume_apply_data')
+    if not resume_data:
+        return jsonify({'status': 'error', 'message': 'No resume data. Analyze a resume first.'}), 400
+
+    if not isinstance(jobs, list) or len(jobs) == 0:
+        return jsonify({'status': 'error', 'message': 'No jobs provided.'}), 400
+
+    capped_jobs = jobs[:30]
+
+    def event_stream():
+        try:
+            from utils.linkedin_agent import JobApplyAgent
+            yield f"data: {json.dumps({'status': 'connecting', 'message': 'Connecting to Chrome...'})}\n\n"
+            agent = JobApplyAgent()
+
+            generator = agent.run_assisted(capped_jobs, resume_data) if mode == 'assisted' else agent.run_automated(capped_jobs, resume_data)
+            for update in generator:
+                yield f"data: {json.dumps(update)}\n\n"
+
+            yield f"data: {json.dumps({'status': 'done', 'message': 'Apply completed.'})}\n\n"
+        except Exception as e:
+            error_msg = str(e)
+            yield f"data: {json.dumps({'status': 'failed', 'message': error_msg})}\n\n"
+
+    return Response(stream_with_context(event_stream()), mimetype='text/event-stream')
 
 
 @app.route('/api/demo')
@@ -634,4 +951,4 @@ def serve_static(filename):
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000, use_reloader=False)

@@ -162,25 +162,33 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED
 
 
-def _build_job_search_query(category: str, skills: list, top_categories: list = None) -> str:
-    clean_category = (category or '').strip()
-    clean_skills = [str(s).strip() for s in (skills or []) if str(s).strip()]
-    top_skills = clean_skills[:2]
+def _build_job_search_query(category: str, top_categories: list = None, experience_level: str = None) -> str:
+    # JSearch works best with short queries (3-6 words).
+    # Strategy: merge ML top prediction + job match roles, deduplicate, pick best 2.
     top_categories = [str(c).strip() for c in (top_categories or []) if str(c).strip()]
-    picked_categories = [clean_category] if clean_category else []
-    for c in top_categories:
-        if c.lower() not in {x.lower() for x in picked_categories}:
-            picked_categories.append(c)
-        if len(picked_categories) >= 2:
+    clean_category = (category or '').strip()
+
+    # ML top prediction first, then job match roles, deduplicated
+    seen, merged = set(), []
+    for role in ([clean_category] + top_categories):
+        if role and role.lower() not in seen:
+            seen.add(role.lower())
+            merged.append(role)
+        if len(merged) == 2:
             break
-    category_part = ' OR '.join(picked_categories)
-    if category_part and top_skills:
-        return f"{category_part} {' '.join(top_skills)} jobs"
-    if category_part:
-        return f"{category_part} jobs"
-    if top_skills:
-        return f"{' '.join(top_skills)} jobs"
-    return "software engineer"
+    roles = merged or ['Software Engineer']
+    role_part = ' OR '.join(roles)
+
+    level = (experience_level or '').strip().lower()
+    if 'fresher' in level or 'intern' in level:
+        return f"Fresher {role_part}"
+    elif level == 'junior':
+        return f"Junior {role_part}"
+    elif level == 'mid-level':
+        return f"Mid {role_part}"
+    elif level == 'senior':
+        return f"Senior {role_part}"
+    return role_part
 
 
 def _normalize_job_source(publisher: str) -> str:
@@ -192,27 +200,15 @@ def _normalize_job_source(publisher: str) -> str:
     return ''
 
 
-def _job_match_pct(user_skills: list, title: str, description: str) -> int:
-    skill_set = {str(s).lower().strip() for s in (user_skills or []) if str(s).strip()}
-    if not skill_set:
-        return 0
-    haystack = f"{title or ''} {description or ''}".lower()
-    overlap = sum(1 for skill in skill_set if skill in haystack)
-    return int(round((overlap / len(skill_set)) * 100))
-
-
-def _format_job_item(job: dict, user_skills: list, source: str) -> dict:
+def _format_job_item(job: dict, source: str) -> dict:
     city = (job.get('job_city') or '').strip()
     country = (job.get('job_country') or '').strip()
     location = ', '.join([v for v in [city, country] if v]) or (job.get('job_location') or 'Location not specified')
     title = job.get('job_title') or 'Untitled role'
-    description = job.get('job_description') or ''
-    match_percentage = _job_match_pct(user_skills, title, description)
     return {
         'job_title': title,
         'company_name': job.get('employer_name') or 'Unknown company',
         'location': location,
-        'match_percentage': match_percentage,
         'apply_url': job.get('job_apply_link') or job.get('job_google_link') or '',
         'source_platform': source,
     }
@@ -576,6 +572,7 @@ def api_analyze():
             'email': email,
             'phone': phone,
             'category': predicted_category,
+            'experience_level': level,
             'skills': [s['text'] if isinstance(s, dict) else s for s in skill_items],
             'years_of_experience': ner_results.get('years_of_experience', ''),
             'experience_entries': ner_results.get('experience_entries', []),
@@ -671,11 +668,16 @@ def api_jobs():
             return jsonify({'status': 'error', 'message': 'No resume data in session. Analyze a resume first.'}), 400
 
         category = resume_data.get('category', 'Software Engineer')
+        experience_level = resume_data.get('experience_level', '')
         job_matches_data = session.get('job_matches')
-        best_role = job_matches_data[0]['role'] if job_matches_data and len(job_matches_data) > 0 else 'Developer'
+        top_categories = [m['role'] for m in (job_matches_data or [])[:3]]
 
-        query = f"{best_role} OR {category}"
-        print(f"[JOB SEARCH] Query: {query}, Location: {location or 'Not specified'}, Country: {country}")
+        query = _build_job_search_query(
+            category=category,
+            top_categories=top_categories,
+            experience_level=experience_level,
+        )
+        print(f"[JOB SEARCH] Query: {query}, Level: {experience_level}, Location: {location or 'Not specified'}, Country: {country}")
 
         endpoint = "https://jsearch.p.rapidapi.com/search"
         headers = {
@@ -685,7 +687,6 @@ def api_jobs():
 
         collected_linkedin = []
         collected_indeed = []
-        skills = resume_data.get('skills', [])
 
         # Parse cities if there are multiple (separated by OR)
         cities = [c.strip() for c in location.split(' OR ')] if location else ['']
@@ -750,15 +751,14 @@ def api_jobs():
                     if len(collected_linkedin) >= 50:
                         break
                     source = _normalize_job_source(job.get('job_publisher'))
-                    formatted_job = _format_job_item(job, skills, source or job.get('job_publisher', 'Other'))
+                    formatted_job = _format_job_item(job, source or job.get('job_publisher', 'Other'))
                     collected_linkedin.append(formatted_job)
 
                 page += 1
 
         # Sort: LinkedIn first, then by match percentage
         def sort_key(j):
-            is_linkedin = 1 if j.get('source_platform', '').lower() == 'linkedin' else 0
-            return (is_linkedin, j.get('match_percentage', 0))
+            return 1 if j.get('source_platform', '').lower() == 'linkedin' else 0
         
         collected_linkedin.sort(key=sort_key, reverse=True)
 
@@ -774,46 +774,6 @@ def api_jobs():
         import traceback
         traceback.print_exc()
         return jsonify({'status': 'error', 'message': f'Failed to fetch jobs: {str(e)}'}), 502
-
-
-@app.route('/api/auto-apply', methods=['POST'])
-def api_auto_apply():
-    """Assisted/Automated apply using browser automation with user's logged-in session."""
-    data = request.get_json() or {}
-    jobs = data.get('jobs') or []
-    mode = (data.get('mode') or 'assisted').strip().lower()
-    acknowledged = bool(data.get('risk_acknowledged', False))
-
-    if mode not in {'assisted', 'automated'}:
-        return jsonify({'status': 'error', 'message': 'mode must be "assisted" or "automated".'}), 400
-    if mode == 'automated' and not acknowledged:
-        return jsonify({'status': 'error', 'message': 'Risk acknowledgement required for automated mode.'}), 400
-
-    resume_data = session.get('resume_apply_data')
-    if not resume_data:
-        return jsonify({'status': 'error', 'message': 'No resume data. Analyze a resume first.'}), 400
-
-    if not isinstance(jobs, list) or len(jobs) == 0:
-        return jsonify({'status': 'error', 'message': 'No jobs provided.'}), 400
-
-    capped_jobs = jobs[:30]
-
-    def event_stream():
-        try:
-            from utils.linkedin_agent import JobApplyAgent
-            yield f"data: {json.dumps({'status': 'connecting', 'message': 'Connecting to Chrome...'})}\n\n"
-            agent = JobApplyAgent()
-
-            generator = agent.run_assisted(capped_jobs, resume_data) if mode == 'assisted' else agent.run_automated(capped_jobs, resume_data)
-            for update in generator:
-                yield f"data: {json.dumps(update)}\n\n"
-
-            yield f"data: {json.dumps({'status': 'done', 'message': 'Apply completed.'})}\n\n"
-        except Exception as e:
-            error_msg = str(e)
-            yield f"data: {json.dumps({'status': 'failed', 'message': error_msg})}\n\n"
-
-    return Response(stream_with_context(event_stream()), mimetype='text/event-stream')
 
 
 @app.route('/api/demo')

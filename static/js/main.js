@@ -11,7 +11,7 @@ const demoBtn     = document.getElementById('demo-btn');
 
 let scoreChart = null;
 let jobsState = { linkedin: [], indeed: [], processed: { linkedin: 0, indeed: 0 } };
-let userLocation = { city: '', country: 'us' };
+let userLocation = { city: '', country: 'in' };
 
 // City to nearby cities mapping
 const NEARBY_CITIES = {
@@ -62,6 +62,28 @@ function getNearbyCities(city) {
   return [city];
 }
 
+function inferCountryFromCity(city) {
+  const c = (city || '').toLowerCase().trim();
+  const IN_CITIES = [
+    'hyderabad','bangalore','chennai','delhi','mumbai','pune','kolkata',
+    'noida','gurgaon','ahmedabad','surat','jaipur','chandigarh','mysore',
+    'coimbatore','visakhapatnam','kochi','nagpur','indore','bhopal',
+    'lucknow','patna','ranchi','bhubaneswar','vadodara'
+  ];
+  const GB_CITIES = ['london','manchester','birmingham','leeds','bristol','glasgow','edinburgh'];
+  const CA_CITIES = ['toronto','vancouver','montreal','calgary','ottawa','edmonton'];
+  const AU_CITIES = ['sydney','melbourne','brisbane','perth','adelaide'];
+  const SG_CITIES = ['singapore'];
+  const AE_CITIES = ['dubai','abu dhabi','sharjah'];
+  if (IN_CITIES.some(city => c.includes(city) || city.includes(c))) return 'in';
+  if (GB_CITIES.some(city => c.includes(city) || city.includes(c))) return 'gb';
+  if (CA_CITIES.some(city => c.includes(city) || city.includes(c))) return 'ca';
+  if (AU_CITIES.some(city => c.includes(city) || city.includes(c))) return 'au';
+  if (SG_CITIES.some(city => c.includes(city) || city.includes(c))) return 'sg';
+  if (AE_CITIES.some(city => c.includes(city) || city.includes(c))) return 'ae';
+  return 'us';
+}
+
 async function getUserLocation() {
   if (!navigator.geolocation) {
     console.log('[LOCATION] Geolocation not supported by browser');
@@ -81,7 +103,7 @@ async function getUserLocation() {
           resolve({ city, country: countryCode });
         } catch (err) {
           console.warn('[LOCATION] Reverse geocoding failed:', err);
-          resolve({ city: '', country: 'us' });
+          resolve({ city: '', country: 'in' });
         }
       },
       err => {
@@ -132,7 +154,7 @@ function initLocationModal() {
   if (skipBtn) {
     skipBtn.addEventListener('click', () => {
       console.log('[LOCATION] Skipped → Searching globally without location filter');
-      userLocation = { city: '', country: 'us' };
+      userLocation = { city: '', country: 'in' };
       modal.style.display = 'none';
       startJobSearch();
     });
@@ -146,9 +168,9 @@ function initLocationModal() {
         const nearbyCities = getNearbyCities(location);
         const displayCities = nearbyCities.slice(0, 5).join(', ') + (nearbyCities.length > 5 ? ', ...' : '');
         console.log(`[LOCATION] Confirmed: ${location} → Searching in: ${displayCities}`);
-        userLocation = { city: location, country: 'us' };
+        userLocation = { city: location, country: inferCountryFromCity(location) };
       } else {
-        userLocation = { city: '', country: 'us' };
+        userLocation = { city: '', country: 'in' };
       }
       modal.style.display = 'none';
       startJobSearch();
@@ -1091,11 +1113,6 @@ async function loadJobsFromAnalysis(data) {
   if (feed) feed.innerHTML = '<div>📍 Click "Find Jobs Near You" to search for opportunities</div>';
 }
 
-function matchBarColor(pct) {
-  if (pct > 70) return 'linear-gradient(90deg, var(--emerald), #34d399)';
-  if (pct >= 40) return 'linear-gradient(90deg, var(--amber), #fcd34d)';
-  return 'linear-gradient(90deg, var(--rose), #fb7185)';
-}
 
 function getPlatformClass(platform) {
   const p = (platform || '').toLowerCase();
@@ -1122,11 +1139,6 @@ function updateSelectionBar() {
     countEl.textContent = `${count} job${count !== 1 ? 's' : ''} selected${linkedinNote}`;
   }
   
-  // Enable/disable assisted/automated buttons based on LinkedIn selection
-  const assistedBtn = document.getElementById('assisted-apply-btn');
-  const automatedBtn = document.getElementById('automated-apply-btn');
-  if (assistedBtn) assistedBtn.disabled = linkedinCount === 0;
-  if (automatedBtn) automatedBtn.disabled = linkedinCount === 0;
 }
 
 function toggleJobSelection(card) {
@@ -1160,10 +1172,6 @@ function renderJobs(jobs, linkedinCount) {
       <div class="job-meta">
         <span class="platform-badge ${platformClass}">${escapeHtml(platform)}</span>
         <span class="applied-badge">✓ Applied</span>
-      </div>
-      <div class="match-wrap">
-        <div class="match-label">Match ${job.match_percentage}%</div>
-        <div class="match-bar-bg"><div class="match-bar-fill" style="width:${Math.min(job.match_percentage, 100)}%;background:${matchBarColor(job.match_percentage)}"></div></div>
       </div>
       <div class="job-actions" onclick="event.stopPropagation()">
         <a class="btn btn-outline btn-sm" href="${job.apply_url}" target="_blank" rel="noopener">Apply ↗</a>
@@ -1234,85 +1242,6 @@ async function openSelectedInTabs() {
   }
   showProgress(`✅ Opened ${opened} jobs in your browser`);
   setTimeout(() => showProgress('', true), 3000);
-}
-
-let pendingAutoApply = null;
-
-async function runAutoApply(mode, riskAcknowledged) {
-  const linkedinJobs = getSelectedLinkedInJobs();
-  if (!linkedinJobs.length) {
-    showProgress('⚠ No LinkedIn jobs selected. Select LinkedIn jobs first.');
-    setTimeout(() => showProgress('', true), 3000);
-    return;
-  }
-
-  showProgress(`Starting ${mode} apply for ${linkedinJobs.length} LinkedIn jobs...`);
-  
-  try {
-    const res = await fetch('/api/auto-apply', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobs: linkedinJobs, mode, risk_acknowledged: riskAcknowledged })
-    });
-    
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      showProgress(`❌ ${data.message || 'Auto-apply request failed.'}`);
-      setTimeout(() => showProgress('', true), 5000);
-      return;
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-    let buffer = '';
-    let appliedCount = 0;
-    const totalJobs = linkedinJobs.length;
-    
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split('\n\n');
-      buffer = events.pop();
-      for (const evt of events) {
-        const line = evt.split('\n').find(l => l.startsWith('data: '));
-        if (!line) continue;
-        try {
-          const payload = JSON.parse(line.slice(6));
-          const status = payload.status || '';
-          const title = payload.job_title || '';
-          const company = payload.company || '';
-          const message = payload.message || '';
-          
-          if (status === 'connecting') showProgress(`🔌 ${message}`);
-          else if (status === 'opening') showProgress(`📂 Opening: ${title} @ ${company}`);
-          else if (status === 'filled') { 
-            appliedCount++;
-            showProgress(`✅ Filled ${appliedCount}/${totalJobs}: ${title}`);
-            markAppliedByTitleCompany(title, company);
-          }
-          else if (status === 'applied') { 
-            appliedCount++;
-            showProgress(`🚀 Applied ${appliedCount}/${totalJobs}: ${title}`);
-            markAppliedByTitleCompany(title, company);
-          }
-          else if (status === 'skipped') showProgress(`⏭ Skipped: ${title} (${payload.reason || 'N/A'})`);
-          else if (status === 'failed') {
-            showProgress(`❌ ${message || title || 'Error occurred'}`);
-          }
-          else if (status === 'done') {
-            showProgress(`🏁 Done! Applied to ${appliedCount} jobs.`);
-            setTimeout(() => showProgress('', true), 5000);
-          }
-        } catch (e) {
-          console.error('Error parsing SSE:', e);
-        }
-      }
-    }
-  } catch (e) {
-    showProgress(`❌ Error: ${e.message}`);
-    setTimeout(() => showProgress('', true), 5000);
-  }
 }
 
 function attachApplyButtons() {

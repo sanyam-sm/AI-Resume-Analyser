@@ -509,10 +509,6 @@
     .platform-badge.glassdoor { background: #0caa41; color: #fff; }
     .platform-badge.ziprecruiter { background: #5ba829; color: #fff; }
     .platform-badge.other { background: var(--txt3); color: #fff; }
-    .match-wrap { margin:8px 0; }
-    .match-bar-bg { height:5px; border-radius:10px; background:var(--border); overflow:hidden; }
-    .match-bar-fill { height:100%; border-radius:10px; }
-    .match-label { font-size:.72rem; color:var(--txt2); margin-bottom:3px; }
     .job-actions { display:flex; align-items:center; justify-content:space-between; margin-top:10px; }
     .applied-badge {
       display:none;
@@ -708,8 +704,6 @@
               <button class="btn btn-outline btn-xs" id="select-all-linkedin">LinkedIn Only</button>
               <button class="btn btn-outline btn-xs" id="clear-selection">Clear</button>
               <span style="color:var(--txt3);font-size:.7rem;">|</span>
-              <button class="btn btn-primary btn-sm" id="assisted-apply-btn" title="Auto-fill forms for LinkedIn jobs">⚡ Assisted</button>
-              <button class="btn btn-outline btn-sm" id="automated-apply-btn" title="Auto-submit for LinkedIn jobs">🤖 Auto</button>
               <button class="btn btn-outline btn-sm" id="open-selected-btn">📂 Open Tabs</button>
             </div>
           </div>
@@ -725,7 +719,6 @@
           <!-- Selection count bar -->
           <div id="selection-bar" class="selection-bar-inline" style="display:none;margin-bottom:12px;padding:8px 12px;background:rgba(124,58,237,.1);border:1px solid var(--violet);border-radius:8px;">
             <span id="selection-count" style="font-size:.85rem;color:var(--violet);font-weight:500;">0 selected</span>
-            <span style="font-size:.75rem;color:var(--txt2);margin-left:8px;">• Assisted/Auto works for LinkedIn only</span>
           </div>
           
           <!-- Jobs grid -->
@@ -745,18 +738,6 @@
   <footer>
     <p>ResumeAI · ML + Gemini Powered · Trained on the <a href="https://www.kaggle.com/datasets/snehaanbhawal/resume-dataset" target="_blank">Kaggle Resume Dataset</a> · Built with Flask + HuggingFace Transformers</p>
   </footer>
-
-  <!-- Risk warning modal for automated apply -->
-  <div class="risk-modal" id="risk-modal" style="display:none">
-    <div class="risk-modal-card">
-      <h3>⚠️ Automated Apply Warning</h3>
-      <p>Fully automated submission may violate platform terms and can risk account suspension. Continue only if you understand and accept this risk.</p>
-      <div class="risk-modal-actions">
-        <button class="btn btn-outline btn-sm" id="risk-cancel-btn">Cancel</button>
-        <button class="btn btn-primary btn-sm" id="risk-confirm-btn">I Understand, Proceed</button>
-      </div>
-    </div>
-  </div>
 
   <div class="risk-modal" id="location-modal" style="display:none">
     <div class="risk-modal-card">

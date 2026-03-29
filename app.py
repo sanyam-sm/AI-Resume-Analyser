@@ -58,6 +58,9 @@ from utils.parser import (
     compute_jd_match, generate_quick_win,
 )
 
+# ─── Cover Letter ──────────────────────────────────────────────────────────────
+from cover_letter import generate_cover_letter
+
 # ─── App Setup ────────────────────────────────────────────────────────────────
 app = Flask(__name__, template_folder='templates', static_folder='static')
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
@@ -156,6 +159,7 @@ ner_status = 'BERT NER ✓' if models['ner_extractor'] else 'Regex fallback (BER
 print(f"Ready!  ML: {models['mode']} | Extraction: {ner_status}")
 print(f"  YouTube API : {'configured ✓' if YOUTUBE_API_KEY else 'not set'}")
 print(f"  Gemini API  : {'configured ✓ (edu/exp extraction)' if os.environ.get('GEMINI_API_KEY') else 'not set (regex fallback for edu/exp)'}")
+print(f"  Groq API    : {'configured ✓ (cover letter generation)' if os.environ.get('GROQ_API_KEY') else 'not set (cover letter unavailable)'}")
 
 
 def allowed_file(filename):
@@ -882,6 +886,9 @@ def api_jd_match():
             match_result['verdict']
         )
 
+        # Store JD text in session so cover letter can use it
+        session['last_jd_text'] = jd_text[:3000]
+
         return jsonify({
             'status': 'success',
             'verdict': match_result['verdict'],
@@ -898,6 +905,230 @@ def api_jd_match():
             'inflation_flags': match_result['inflation_flags'],
             'preferred_gaps': match_result['preferred_gaps'],
         })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ─── Cover Letter Route ───────────────────────────────────────────────────────
+
+@app.route('/api/generate-cover-letter', methods=['POST'])
+def api_generate_cover_letter():
+    """
+    Generate a cover letter from resume data + JD text.
+    Returns:
+      - cover_letter text (for preview in browser)
+      - candidate info (for PDF header)
+    Also supports PDF download via ?format=pdf query param.
+    """
+    try:
+        resume_data = session.get('resume_apply_data')
+        if not resume_data:
+            return jsonify({'status': 'error', 'message': 'No resume data found. Please analyze a resume first.'}), 400
+
+        # JD text: prefer body payload, fall back to session (from jd-match)
+        body = request.get_json(silent=True) or {}
+        jd_text = body.get('jd_text', '') or session.get('last_jd_text', '')
+
+        if not jd_text:
+            return jsonify({'status': 'error', 'message': 'No job description found. Please run JD Match first.'}), 400
+
+        result = generate_cover_letter(resume_data, jd_text)
+
+        if not result['success']:
+            return jsonify({'status': 'error', 'message': result['error']}), 500
+
+        return jsonify({
+            'status'       : 'success',
+            'cover_letter' : result['cover_letter'],
+            'candidate'    : result['candidate'],
+            'date'         : result['date'],
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/download-cover-letter', methods=['POST'])
+def api_download_cover_letter():
+    """
+    Generate PDF from cover letter text using ReportLab (pure Python, no system deps).
+    Expects JSON body: { cover_letter, candidate, date }
+    Returns: PDF file as attachment.
+    """
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_JUSTIFY
+        import io
+    except ImportError:
+        return jsonify({'status': 'error', 'message': 'ReportLab not installed. Run: pip install reportlab'}), 500
+
+    try:
+        body = request.get_json()
+        if not body:
+            return jsonify({'status': 'error', 'message': 'No data provided.'}), 400
+
+        cover_letter_text = body.get('cover_letter', '')
+        candidate         = body.get('candidate', {})
+        letter_date       = body.get('date', '')
+
+        if not cover_letter_text:
+            return jsonify({'status': 'error', 'message': 'Cover letter text is required.'}), 400
+
+        candidate_name  = candidate.get('name', 'Candidate')
+        candidate_email = candidate.get('email', '')
+        candidate_phone = candidate.get('phone', '')
+
+        # ── Build PDF in memory ───────────────────────────────────────────────
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            leftMargin=22*mm, rightMargin=22*mm,
+            topMargin=20*mm, bottomMargin=20*mm,
+        )
+
+        # ── Colour palette ────────────────────────────────────────────────────
+        VIOLET  = colors.HexColor('#7c3aed')
+        DARK    = colors.HexColor('#0f172a')
+        MID     = colors.HexColor('#1e293b')
+        GREY    = colors.HexColor('#64748b')
+
+        # ── Styles ────────────────────────────────────────────────────────────
+        styles = getSampleStyleSheet()
+
+        name_style = ParagraphStyle(
+            'CandidateName',
+            fontName='Helvetica-Bold',
+            fontSize=18,
+            textColor=DARK,
+            leading=22,
+            spaceAfter=2,
+        )
+        contact_style = ParagraphStyle(
+            'Contact',
+            fontName='Helvetica',
+            fontSize=9,
+            textColor=GREY,
+            leading=13,
+        )
+        date_style = ParagraphStyle(
+            'Date',
+            fontName='Helvetica',
+            fontSize=10,
+            textColor=GREY,
+            spaceBefore=14,
+            spaceAfter=14,
+        )
+        body_style = ParagraphStyle(
+            'Body',
+            fontName='Helvetica',
+            fontSize=10.5,
+            textColor=MID,
+            leading=17,
+            spaceAfter=10,
+            alignment=TA_JUSTIFY,
+        )
+        closing_style = ParagraphStyle(
+            'Closing',
+            fontName='Helvetica',
+            fontSize=10.5,
+            textColor=MID,
+            leading=17,
+            spaceBefore=16,
+            spaceAfter=36,
+        )
+        sig_style = ParagraphStyle(
+            'Signature',
+            fontName='Helvetica-Bold',
+            fontSize=12,
+            textColor=DARK,
+            leading=16,
+        )
+        footer_style = ParagraphStyle(
+            'Footer',
+            fontName='Helvetica',
+            fontSize=7.5,
+            textColor=GREY,
+            alignment=1,  # centre
+            spaceBefore=20,
+        )
+
+        # ── Build story ───────────────────────────────────────────────────────
+        story = []
+
+        # Top accent rule (violet)
+        story.append(HRFlowable(
+            width='100%', thickness=4,
+            color=VIOLET, spaceAfter=16,
+        ))
+
+        # Candidate name
+        story.append(Paragraph(candidate_name, name_style))
+
+        # Contact line
+        contact_parts = [p for p in [candidate_email, candidate_phone] if p]
+        if contact_parts:
+            story.append(Paragraph('  ·  '.join(contact_parts), contact_style))
+
+        # Thin separator rule
+        story.append(HRFlowable(
+            width='100%', thickness=0.5,
+            color=colors.HexColor('#e2e8f0'),
+            spaceBefore=12, spaceAfter=4,
+        ))
+
+        # Date
+        if letter_date:
+            story.append(Paragraph(letter_date, date_style))
+
+        # Body paragraphs — split on newlines
+        paragraphs = [p.strip() for p in cover_letter_text.split('\n') if p.strip()]
+        for para in paragraphs:
+            story.append(Paragraph(para, body_style))
+
+        # Closing
+        story.append(Paragraph('Sincerely,', closing_style))
+
+        # Signature rule + name
+        story.append(HRFlowable(
+            width=60*mm, thickness=1.5,
+            color=VIOLET, spaceAfter=8,
+        ))
+        story.append(Paragraph(candidate_name, sig_style))
+
+        # Footer
+        story.append(HRFlowable(
+            width='100%', thickness=0.5,
+            color=colors.HexColor('#e2e8f0'),
+            spaceBefore=24, spaceAfter=6,
+        ))
+        story.append(Paragraph('Generated by ResumeAI · AI-Powered Resume Analyzer', footer_style))
+
+        # ── Render ────────────────────────────────────────────────────────────
+        doc.build(story)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+
+        safe_name = candidate_name.replace(' ', '_')
+        filename  = f"Cover_Letter_{safe_name}.pdf"
+
+        return Response(
+            pdf_bytes,
+            mimetype='application/pdf',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Content-Type': 'application/pdf',
+            }
+        )
 
     except Exception as e:
         import traceback

@@ -13,6 +13,9 @@ let scoreChart = null;
 let jobsState = { linkedin: [], indeed: [], processed: { linkedin: 0, indeed: 0 } };
 let userLocation = { city: '', country: 'in' };
 
+// Store cover letter data for PDF download
+let _coverLetterData = null;
+
 // City to nearby cities mapping
 const NEARBY_CITIES = {
   'hyderabad': ['Hyderabad', 'Bangalore', 'Chennai', 'Visakhapatnam', 'Pune'],
@@ -297,6 +300,15 @@ resetBtn.addEventListener('click', () => {
   if (jdSection) jdSection.style.display = 'none';
   if (jdTextarea) jdTextarea.value = '';
   if (jdResults) jdResults.style.display = 'none';
+
+  // Reset cover letter
+  _coverLetterData = null;
+  const clPreview = document.getElementById('cover-letter-preview');
+  const clText    = document.getElementById('cover-letter-text');
+  if (clPreview) clPreview.style.display = 'none';
+  if (clText)    clText.textContent = '';
+  const genBtn = document.getElementById('generate-cover-letter-btn');
+  if (genBtn) { genBtn.disabled = false; genBtn.textContent = '✉ Generate Cover Letter'; }
   
   // Reset jobs section completely
   const jobsSection = document.getElementById('jobs-section');
@@ -966,6 +978,16 @@ if (jdAnalyzeBtn) {
       // Render results and show card
       renderJDMatch(data);
       jdResults.style.display = 'block';
+
+      // Reset cover letter state when JD changes
+      _coverLetterData = null;
+      const clPreview = document.getElementById('cover-letter-preview');
+      const clText    = document.getElementById('cover-letter-text');
+      if (clPreview) clPreview.style.display = 'none';
+      if (clText)    clText.textContent = '';
+      const genBtn = document.getElementById('generate-cover-letter-btn');
+      if (genBtn) { genBtn.disabled = false; genBtn.textContent = '✉ Generate Cover Letter'; }
+
       jdResults.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
     } catch (err) {
@@ -982,6 +1004,10 @@ if (jdClearBtn) {
     if (jdTextarea) jdTextarea.value = '';
     if (jdResults) jdResults.style.display = 'none';
     if (jdAnalyzeBtn) jdAnalyzeBtn.textContent = 'Analyze Match';
+    // Also clear cover letter
+    _coverLetterData = null;
+    const clPreview = document.getElementById('cover-letter-preview');
+    if (clPreview) clPreview.style.display = 'none';
   });
 }
 
@@ -1288,3 +1314,117 @@ function attachApplyButtons() {
 }
 
 attachApplyButtons();
+
+
+// ── Cover Letter Generation ───────────────────────────────────────────────────
+
+const generateCoverLetterBtn   = document.getElementById('generate-cover-letter-btn');
+const downloadCoverLetterBtn   = document.getElementById('download-cover-letter-btn');
+const regenerateCoverLetterBtn = document.getElementById('regenerate-cover-letter-btn');
+const coverLetterPreview       = document.getElementById('cover-letter-preview');
+const coverLetterText          = document.getElementById('cover-letter-text');
+
+async function generateCoverLetter() {
+  if (!generateCoverLetterBtn) return;
+
+  generateCoverLetterBtn.disabled    = true;
+  generateCoverLetterBtn.textContent = '⏳ Generating...';
+
+  try {
+    const jdText = document.getElementById('jd-textarea')?.value?.trim() || '';
+
+    const res = await fetch('/api/generate-cover-letter', {
+      method : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body   : JSON.stringify({ jd_text: jdText }),
+    });
+
+    const data = await res.json();
+
+    if (data.status !== 'success') {
+      alert('Cover letter generation failed: ' + (data.message || 'Unknown error'));
+      generateCoverLetterBtn.disabled    = false;
+      generateCoverLetterBtn.textContent = '✉ Generate Cover Letter';
+      return;
+    }
+
+    // Store for PDF download
+    _coverLetterData = {
+      cover_letter: data.cover_letter,
+      candidate   : data.candidate,
+      date        : data.date,
+    };
+
+    // Show preview
+    if (coverLetterText)    coverLetterText.textContent   = data.cover_letter;
+    if (coverLetterPreview) coverLetterPreview.style.display = 'block';
+
+    coverLetterPreview.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    generateCoverLetterBtn.disabled    = false;
+    generateCoverLetterBtn.textContent = '✉ Generate Cover Letter';
+
+  } catch (err) {
+    alert('Server error: ' + err.message);
+    generateCoverLetterBtn.disabled    = false;
+    generateCoverLetterBtn.textContent = '✉ Generate Cover Letter';
+  }
+}
+
+async function downloadCoverLetterPDF() {
+  if (!_coverLetterData) {
+    alert('Please generate a cover letter first.');
+    return;
+  }
+
+  if (!downloadCoverLetterBtn) return;
+
+  downloadCoverLetterBtn.disabled    = true;
+  downloadCoverLetterBtn.textContent = '⏳ Generating PDF...';
+
+  try {
+    const res = await fetch('/api/download-cover-letter', {
+      method : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body   : JSON.stringify(_coverLetterData),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: 'PDF generation failed' }));
+      alert('PDF error: ' + (err.message || 'Unknown error'));
+      downloadCoverLetterBtn.disabled    = false;
+      downloadCoverLetterBtn.textContent = '⬇ Download as PDF';
+      return;
+    }
+
+    // Trigger browser download
+    const blob     = await res.blob();
+    const url      = URL.createObjectURL(blob);
+    const a        = document.createElement('a');
+    const name     = (_coverLetterData.candidate?.name || 'Candidate').replace(/\s+/g, '_');
+    a.href         = url;
+    a.download     = `Cover_Letter_${name}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+  } catch (err) {
+    alert('Download error: ' + err.message);
+  }
+
+  downloadCoverLetterBtn.disabled    = false;
+  downloadCoverLetterBtn.textContent = '⬇ Download as PDF';
+}
+
+if (generateCoverLetterBtn) {
+  generateCoverLetterBtn.addEventListener('click', generateCoverLetter);
+}
+
+if (regenerateCoverLetterBtn) {
+  regenerateCoverLetterBtn.addEventListener('click', generateCoverLetter);
+}
+
+if (downloadCoverLetterBtn) {
+  downloadCoverLetterBtn.addEventListener('click', downloadCoverLetterPDF);
+}

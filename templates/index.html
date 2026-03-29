@@ -453,6 +453,48 @@
     .jd-inflation-item { font-size: .82rem; color: var(--txt2); margin-bottom: 4px; }
     .jd-inflation-note { font-size: .78rem; color: var(--txt3); margin-top: 8px; font-style: italic; }
 
+    /* ── Cover Letter Section ─────────────────────────────────────────────── */
+    .cover-letter-divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 24px 0;
+    }
+    .cover-letter-section-title {
+      font-family: var(--font-h); font-size: .78rem; font-weight: 700;
+      letter-spacing: .08em; text-transform: uppercase;
+      color: var(--txt3); margin-bottom: 14px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .cover-letter-section-title .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--violet2); }
+
+    #cover-letter-preview {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 24px;
+      margin-top: 16px;
+      display: none;
+    }
+    .cover-letter-text {
+      font-size: .9rem;
+      line-height: 1.8;
+      color: var(--txt);
+      white-space: pre-wrap;
+      font-family: var(--font-b);
+    }
+    .cover-letter-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+    .btn-emerald {
+      background: linear-gradient(135deg, #059669, var(--emerald));
+      color: #fff;
+      box-shadow: 0 4px 16px rgba(16,185,129,.3);
+    }
+    .btn-emerald:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(16,185,129,.4); }
+
     /* ── Job Listings Section ───────────────────────────────────────────── */
     .jobs-section { margin-bottom: 20px; }
     .jobs-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
@@ -671,6 +713,31 @@
         <div id="jd-breakdown"></div>
         <div id="jd-quick-win"></div>
         <div id="jd-inflation-flags"></div>
+
+        <!-- ── Cover Letter Section ── -->
+        <hr class="cover-letter-divider">
+        <div class="cover-letter-section-title">
+          <span class="dot"></span>Cover Letter Generator
+        </div>
+        <p style="font-size:.85rem;color:var(--txt2);margin-bottom:14px;">
+          Generate a tailored cover letter based on your resume and the job description above.
+        </p>
+        <button class="btn btn-primary" id="generate-cover-letter-btn">
+          ✉ Generate Cover Letter
+        </button>
+
+        <!-- Preview area — hidden until generated -->
+        <div id="cover-letter-preview">
+          <div class="cover-letter-text" id="cover-letter-text"></div>
+          <div class="cover-letter-actions">
+            <button class="btn btn-emerald" id="download-cover-letter-btn">
+              ⬇ Download as PDF
+            </button>
+            <button class="btn btn-outline btn-sm" id="regenerate-cover-letter-btn">
+              ↺ Regenerate
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 

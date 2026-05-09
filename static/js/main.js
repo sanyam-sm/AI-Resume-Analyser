@@ -10,6 +10,252 @@ const resetBtn    = document.getElementById('reset-btn');
 const demoBtn     = document.getElementById('demo-btn');
 
 let scoreChart = null;
+let jobsState = { linkedin: [], indeed: [], processed: { linkedin: 0, indeed: 0 } };
+let userLocation = { city: '', country: 'in' };
+
+// Store cover letter data for PDF download
+let _coverLetterData = null;
+
+// City to nearby cities mapping
+const NEARBY_CITIES = {
+  'hyderabad': ['Hyderabad', 'Bangalore', 'Chennai', 'Visakhapatnam', 'Pune'],
+  'bangalore': ['Bangalore', 'Hyderabad', 'Chennai', 'Pune', 'Mysore'],
+  'chennai': ['Chennai', 'Bangalore', 'Hyderabad', 'Coimbatore', 'Pune'],
+  'delhi': ['Delhi', 'Noida', 'Gurgaon', 'Faridabad', 'Jaipur', 'Greater Noida'],
+  'noida': ['Noida', 'Delhi', 'Gurgaon', 'Faridabad', 'Greater Noida', 'Jaipur'],
+  'gurgaon': ['Gurgaon', 'Delhi', 'Noida', 'Faridabad', 'Jaipur', 'Greater Noida'],
+  'mumbai': ['Mumbai', 'Pune', 'Ahmedabad', 'Surat', 'Nagpur'],
+  'pune': ['Pune', 'Mumbai', 'Bangalore', 'Hyderabad', 'Nashik', 'Aurangabad'],
+  'ahmedabad': ['Ahmedabad', 'Surat', 'Vadodara', 'Mumbai', 'Rajkot'],
+  'kolkata': ['Kolkata', 'Bhubaneswar', 'Ranchi', 'Patna', 'Asansol'],
+  'bangalore': ['Bangalore', 'Hyderabad', 'Mysore', 'Chennai', 'Pune', 'Madurai'],
+  'mysore': ['Mysore', 'Bangalore', 'Coimbatore', 'Chennai', 'Hassan'],
+  'coimbatore': ['Coimbatore', 'Chennai', 'Bangalore', 'Mysore', 'Salem'],
+  'jaipur': ['Jaipur', 'Delhi', 'Agra', 'Udaipur', 'Ajmer'],
+  'chandigarh': ['Chandigarh', 'Mohali', 'Panchkula', 'Zirakpur', 'Kharar'],
+  'toronto': ['Toronto', 'Mississauga', 'Brampton', 'Hamilton', 'Markham', 'Vaughan'],
+  'vancouver': ['Vancouver', 'Burnaby', 'Surrey', 'Richmond', 'Coquitlam'],
+  'new york': ['New York', 'Newark', 'Jersey City', 'Yonkers', 'New Rochelle'],
+  'los angeles': ['Los Angeles', 'Long Beach', 'Anaheim', 'Santa Ana', 'Irvine'],
+  'london': ['London', 'Manchester', 'Birmingham', 'Leeds', 'Bristol'],
+  'san francisco': ['San Francisco', 'Oakland', 'San Jose', 'Palo Alto', 'Mountain View'],
+  'seattle': ['Seattle', 'Bellevue', 'Redmond', 'Renton', 'Kent'],
+  'austin': ['Austin', 'Round Rock', 'Cedar Park', 'Pflugerville', 'Georgetown'],
+  'singapore': ['Singapore'],
+  'dubai': ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman'],
+};
+
+function getNearbyCities(city) {
+  if (!city) return [];
+  const normalized = city.toLowerCase().trim();
+
+  // Direct match
+  if (NEARBY_CITIES[normalized]) {
+    return NEARBY_CITIES[normalized];
+  }
+
+  // Partial match (e.g., user types "Delhi" and we find "delhi")
+  for (const [key, cities] of Object.entries(NEARBY_CITIES)) {
+    if (normalized.includes(key) || key.includes(normalized)) {
+      return cities;
+    }
+  }
+
+  // If no matches, return the city itself
+  return [city];
+}
+
+function inferCountryFromCity(city) {
+  const c = (city || '').toLowerCase().trim();
+  const IN_CITIES = [
+    'hyderabad','bangalore','chennai','delhi','mumbai','pune','kolkata',
+    'noida','gurgaon','ahmedabad','surat','jaipur','chandigarh','mysore',
+    'coimbatore','visakhapatnam','kochi','nagpur','indore','bhopal',
+    'lucknow','patna','ranchi','bhubaneswar','vadodara'
+  ];
+  const GB_CITIES = ['london','manchester','birmingham','leeds','bristol','glasgow','edinburgh'];
+  const CA_CITIES = ['toronto','vancouver','montreal','calgary','ottawa','edmonton'];
+  const AU_CITIES = ['sydney','melbourne','brisbane','perth','adelaide'];
+  const SG_CITIES = ['singapore'];
+  const AE_CITIES = ['dubai','abu dhabi','sharjah'];
+  if (IN_CITIES.some(city => c.includes(city) || city.includes(c))) return 'in';
+  if (GB_CITIES.some(city => c.includes(city) || city.includes(c))) return 'gb';
+  if (CA_CITIES.some(city => c.includes(city) || city.includes(c))) return 'ca';
+  if (AU_CITIES.some(city => c.includes(city) || city.includes(c))) return 'au';
+  if (SG_CITIES.some(city => c.includes(city) || city.includes(c))) return 'sg';
+  if (AE_CITIES.some(city => c.includes(city) || city.includes(c))) return 'ae';
+  return 'us';
+}
+
+async function getUserLocation() {
+  if (!navigator.geolocation) {
+    console.log('[LOCATION] Geolocation not supported by browser');
+    return null;
+  }
+  return new Promise(resolve => {
+    navigator.geolocation.getCurrentPosition(
+      async pos => {
+        const { latitude, longitude } = pos.coords;
+        console.log(`[LOCATION] Got coordinates: ${latitude}, ${longitude}`);
+        try {
+          const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`);
+          const j = await r.json();
+          const city = j?.address?.city || j?.address?.town || j?.address?.village || '';
+          const countryCode = (j?.address?.country_code || 'us').toLowerCase();
+          console.log(`[LOCATION] Detected: ${city}, ${countryCode}`);
+          resolve({ city, country: countryCode });
+        } catch (err) {
+          console.warn('[LOCATION] Reverse geocoding failed:', err);
+          resolve({ city: '', country: 'in' });
+        }
+      },
+      err => {
+        console.warn('[LOCATION] Permission denied or error:', err.message);
+        resolve(null);
+      },
+      { enableHighAccuracy: false, timeout: 6000, maximumAge: 600000 }
+    );
+  });
+}
+
+// ── Location Modal Handler ────────────────────────────────────────────────────────
+function initLocationModal() {
+  const modal = document.getElementById('location-modal');
+  const detectBtn = document.getElementById('detect-location-btn');
+  const skipBtn = document.getElementById('skip-location-btn');
+  const confirmBtn = document.getElementById('confirm-location-btn');
+  const manualInput = document.getElementById('manual-location-input');
+
+  if (!modal) return;
+
+  // Don't show on load - only on demand via "Find Jobs" button
+  modal.style.display = 'none';
+
+  // Detect location button
+  if (detectBtn) {
+    detectBtn.addEventListener('click', async () => {
+      detectBtn.disabled = true;
+      detectBtn.textContent = '🔍 Detecting...';
+      const loc = await getUserLocation();
+      if (loc && loc.city) {
+        manualInput.value = loc.city;
+        userLocation = loc;
+        const nearbyCities = getNearbyCities(loc.city);
+        const displayCities = nearbyCities.slice(0, 5).join(', ') + (nearbyCities.length > 5 ? ', ...' : '');
+        console.log(`[LOCATION] Detected: ${loc.city} → Searching in: ${displayCities}`);
+        modal.style.display = 'none';
+        startJobSearch();
+      } else {
+        detectBtn.disabled = false;
+        detectBtn.textContent = '🎯 Detect Location';
+        alert('Could not detect location. Please enter manually or skip.');
+      }
+    });
+  }
+
+  // Skip button
+  if (skipBtn) {
+    skipBtn.addEventListener('click', () => {
+      console.log('[LOCATION] Skipped → Searching globally without location filter');
+      userLocation = { city: '', country: 'in' };
+      modal.style.display = 'none';
+      startJobSearch();
+    });
+  }
+
+  // Confirm button
+  if (confirmBtn) {
+    confirmBtn.addEventListener('click', () => {
+      const location = manualInput.value.trim();
+      if (location) {
+        const nearbyCities = getNearbyCities(location);
+        const displayCities = nearbyCities.slice(0, 5).join(', ') + (nearbyCities.length > 5 ? ', ...' : '');
+        console.log(`[LOCATION] Confirmed: ${location} → Searching in: ${displayCities}`);
+        userLocation = { city: location, country: inferCountryFromCity(location) };
+      } else {
+        userLocation = { city: '', country: 'in' };
+      }
+      modal.style.display = 'none';
+      startJobSearch();
+    });
+  }
+
+  // Allow Enter key to confirm
+  if (manualInput) {
+    manualInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter' && confirmBtn) confirmBtn.click();
+    });
+  }
+}
+
+// Show location modal on Find Jobs button click
+function attachFindJobsButton() {
+  const btn = document.getElementById('find-jobs-btn');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      const modal = document.getElementById('location-modal');
+      if (modal) {
+        modal.style.display = 'flex';
+        document.getElementById('manual-location-input').value = userLocation.city || '';
+      }
+    });
+  }
+}
+
+async function startJobSearch() {
+  const jobsGrid = document.getElementById('jobs-grid');
+  const feed = document.getElementById('apply-progress-feed');
+  const findBtn = document.getElementById('find-jobs-btn');
+
+  if (findBtn) findBtn.disabled = true;
+  if (feed) feed.innerHTML = '<div>📍 Searching for jobs...</div>';
+  if (jobsGrid) jobsGrid.innerHTML = Array.from({ length: 6 }).map(() => '<div class="skeleton"></div>').join('');
+
+  const cityInput = userLocation?.city || '';
+  const country = userLocation?.country || 'us';
+
+  // Get nearby cities
+  const nearbyCities = getNearbyCities(cityInput);
+  const locationQuery = nearbyCities.join(' OR ');
+
+  if (locationQuery) {
+    if (feed) feed.innerHTML = `<div>🔌 Searching for jobs in ${nearbyCities.slice(0, 3).join(', ')}${nearbyCities.length > 3 ? ' & more...' : ''}...</div>`;
+  } else {
+    if (feed) feed.innerHTML = '<div>🔌 Searching jobs globally...</div>';
+  }
+
+  try {
+    const res = await fetch(
+      `/api/jobs?location=${encodeURIComponent(locationQuery)}&country=${encodeURIComponent(country)}`
+    );
+    const payload = await res.json();
+    if (payload.status === 'setup_required') {
+      const grid = document.getElementById('jobs-grid');
+      if (grid) grid.innerHTML = `<div class="empty-state">${escapeHtml(payload.message)}</div>`;
+      if (feed) feed.innerHTML = '<div>🛠 API key setup required.</div>';
+      return;
+    }
+    if (payload.status !== 'success') throw new Error(payload.message || 'Could not fetch jobs');
+    
+    const jobs = payload.jobs || [];
+    const linkedinCount = payload.linkedin_count || 0;
+    renderJobs(jobs, linkedinCount);
+
+    if (feed) feed.innerHTML = `<div>✅ Found ${jobs.length} jobs (${linkedinCount} LinkedIn). Click cards to select, then apply!</div>`;
+  } catch (err) {
+    const grid = document.getElementById('jobs-grid');
+    if (grid) grid.innerHTML = `<div class="empty-state">Failed to load jobs: ${escapeHtml(err.message)}</div>`;
+    if (feed) feed.innerHTML = `<div>❌ ${escapeHtml(err.message)}</div>`;
+  } finally {
+    if (findBtn) findBtn.disabled = false;
+  }
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', () => {
+  initLocationModal();
+  attachFindJobsButton();
+});
 
 // ── Drag & Drop ──────────────────────────────────────────────────────────────
 uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
@@ -46,6 +292,40 @@ resetBtn.addEventListener('click', () => {
   fileInfo.style.display = 'none';
   fileInfo.textContent = '';
   if (scoreChart) { scoreChart.destroy(); scoreChart = null; }
+
+  // Reset JD section
+  const jdSection = document.getElementById('jd-section');
+  const jdTextarea = document.getElementById('jd-textarea');
+  const jdResults = document.getElementById('card-jd-results');
+  if (jdSection) jdSection.style.display = 'none';
+  if (jdTextarea) jdTextarea.value = '';
+  if (jdResults) jdResults.style.display = 'none';
+
+  // Reset cover letter
+  _coverLetterData = null;
+  const clPreview = document.getElementById('cover-letter-preview');
+  const clText    = document.getElementById('cover-letter-text');
+  if (clPreview) clPreview.style.display = 'none';
+  if (clText)    clText.textContent = '';
+  const genBtn = document.getElementById('generate-cover-letter-btn');
+  if (genBtn) { genBtn.disabled = false; genBtn.textContent = '✉ Generate Cover Letter'; }
+  
+  // Reset jobs section completely
+  const jobsSection = document.getElementById('jobs-section');
+  if (jobsSection) jobsSection.style.display = 'none';
+  const jobsGrid = document.getElementById('jobs-grid');
+  if (jobsGrid) jobsGrid.innerHTML = '';
+  const selectionBar = document.getElementById('selection-bar');
+  if (selectionBar) selectionBar.style.display = 'none';
+  const progressFeed = document.getElementById('apply-progress-feed');
+  if (progressFeed) progressFeed.innerHTML = '';
+  const totalCount = document.getElementById('jobs-total-count');
+  if (totalCount) totalCount.textContent = '0 jobs';
+  const linkedinBadge = document.getElementById('linkedin-badge');
+  if (linkedinBadge) linkedinBadge.textContent = '0 LinkedIn';
+  
+  // Reset jobs state
+  jobsState = { allJobs: [], processed: {} };
 });
 
 // ── Handle File ───────────────────────────────────────────────────────────────
@@ -114,6 +394,11 @@ function renderResults(data, meta = {}) {
   renderProjectIdeas(data);
   renderCourses(data);
   renderPdfPreview(data);
+  loadJobsFromAnalysis(data);
+
+  // Show JD Match section after resume is analyzed
+  const jdSection = document.getElementById('jd-section');
+  if (jdSection) jdSection.style.display = 'block';
 
   results.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -653,4 +938,493 @@ function escapeHtml(text) {
   const div       = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// ── JD Match Section ──────────────────────────────────────────────────────────
+const jdAnalyzeBtn = document.getElementById('jd-analyze-btn');
+const jdClearBtn   = document.getElementById('jd-clear-btn');
+const jdTextarea   = document.getElementById('jd-textarea');
+const jdResults    = document.getElementById('card-jd-results');
+
+if (jdAnalyzeBtn) {
+  jdAnalyzeBtn.addEventListener('click', async () => {
+    const jdText = jdTextarea?.value?.trim();
+
+    if (!jdText) {
+      showError('Please paste a job description first.');
+      return;
+    }
+
+    // Button loading state
+    jdAnalyzeBtn.disabled    = true;
+    jdAnalyzeBtn.textContent = 'Analyzing...';
+
+    try {
+      const res = await fetch('/api/jd-match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jd_text: jdText })
+      });
+
+      const data = await res.json();
+
+      if (data.status !== 'success') {
+        showError(data.message || 'JD analysis failed.');
+        jdAnalyzeBtn.disabled    = false;
+        jdAnalyzeBtn.textContent = 'Analyze Match';
+        return;
+      }
+
+      // Render results and show card
+      renderJDMatch(data);
+      jdResults.style.display = 'block';
+
+      // Reset cover letter state when JD changes
+      _coverLetterData = null;
+      const clPreview = document.getElementById('cover-letter-preview');
+      const clText    = document.getElementById('cover-letter-text');
+      if (clPreview) clPreview.style.display = 'none';
+      if (clText)    clText.textContent = '';
+      const genBtn = document.getElementById('generate-cover-letter-btn');
+      if (genBtn) { genBtn.disabled = false; genBtn.textContent = '✉ Generate Cover Letter'; }
+
+      jdResults.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    } catch (err) {
+      showError('Server error: ' + err.message);
+    }
+
+    jdAnalyzeBtn.disabled    = false;
+    jdAnalyzeBtn.textContent = 'Analyze Match';
+  });
+}
+
+if (jdClearBtn) {
+  jdClearBtn.addEventListener('click', () => {
+    if (jdTextarea) jdTextarea.value = '';
+    if (jdResults) jdResults.style.display = 'none';
+    if (jdAnalyzeBtn) jdAnalyzeBtn.textContent = 'Analyze Match';
+    // Also clear cover letter
+    _coverLetterData = null;
+    const clPreview = document.getElementById('cover-letter-preview');
+    if (clPreview) clPreview.style.display = 'none';
+  });
+}
+
+function renderJDMatch(data) {
+  const verdictEl   = document.getElementById('jd-verdict');
+  const breakdownEl = document.getElementById('jd-breakdown');
+  const quickWinEl  = document.getElementById('jd-quick-win');
+  const inflationEl = document.getElementById('jd-inflation-flags');
+
+  if (!verdictEl || !breakdownEl || !quickWinEl || !inflationEl) return;
+
+  // Layer 1 — Verdict
+  const verdictConfig = {
+    strong_match:  { color: 'var(--emerald)', label: 'Strong Match',  desc: 'You meet most requirements and are a great fit for this role.' },
+    partial_match: { color: 'var(--amber)',   label: 'Partial Match', desc: 'You have relevant experience but some gaps exist.' },
+    stretch_role:  { color: 'var(--rose)',    label: 'Stretch Role',  desc: 'This role may require skills beyond your current profile.' },
+    not_suitable:  { color: '#64748b',        label: 'Low Match',     desc: 'Your profile may not align with this position.' }
+  };
+
+  const v = verdictConfig[data.verdict] || verdictConfig.not_suitable;
+  verdictEl.innerHTML = `
+    <div class="jd-verdict-row">
+      <span class="jd-verdict-dot" style="background:${v.color}"></span>
+      <span class="jd-verdict-label" style="color:${v.color}; font-weight:bold; font-size: 1.2rem;">${v.label}</span>
+    </div>
+    <div class="jd-verdict-desc" style="margin-top: 8px;">${v.desc}</div>`;
+
+  // Layer 2 — Breakdown
+  const breakdown = data.breakdown || {};
+  const directMatches  = breakdown.direct_matches  || [];
+  const impliedMatches = breakdown.implied_matches || [];
+  const genuineGaps    = breakdown.genuine_gaps    || [];
+  const expAligned     = breakdown.exp_aligned;
+  const resumeLevel    = breakdown.resume_level    || '—';
+  const jdLevel        = breakdown.jd_level        || '—';
+
+  let breakdownHtml = '';
+
+  // Row 1: Core skills met
+  if (directMatches.length > 0) {
+    const pills = directMatches.map(s => `<span class="jd-pill green">${escapeHtml(s)}</span>`).join('');
+    breakdownHtml += `
+      <div class="jd-breakdown-row">
+        <span class="jd-breakdown-icon" style="color:var(--emerald)">✓</span>
+        <div class="jd-breakdown-content">
+          <div class="jd-breakdown-label">Core skills met</div>
+          <div>${pills}</div>
+        </div>
+      </div>`;
+  }
+
+  // Row 2: Implied but not stated
+  if (impliedMatches.length > 0) {
+    const impliedText = impliedMatches.slice(0, 3).map(s =>
+      `Your resume implies "${escapeHtml(s)}" — consider adding it explicitly.`
+    ).join(' ');
+    breakdownHtml += `
+      <div class="jd-breakdown-row">
+        <span class="jd-breakdown-icon" style="color:var(--violet2)">ℹ</span>
+        <div class="jd-breakdown-content">
+          <div class="jd-breakdown-label">Implied but not stated</div>
+          <div style="font-size:.84rem;color:var(--txt)">${impliedText}</div>
+        </div>
+      </div>`;
+  }
+
+  // Row 3: Genuine gaps
+  if (genuineGaps.length > 0) {
+    const pills = genuineGaps.map(s => `<span class="jd-pill rose">${escapeHtml(s)}</span>`).join('');
+    breakdownHtml += `
+      <div class="jd-breakdown-row">
+        <span class="jd-breakdown-icon" style="color:var(--rose)">✗</span>
+        <div class="jd-breakdown-content">
+          <div class="jd-breakdown-label">Genuine gaps</div>
+          <div>${pills}</div>
+        </div>
+      </div>`;
+  }
+
+  // Row 4: Experience alignment
+  const expIcon  = expAligned ? '✓' : '⚠';
+  const expColor = expAligned ? 'var(--emerald)' : 'var(--amber)';
+  const expText  = expAligned
+    ? `Your experience level (${resumeLevel}) aligns with the role (${jdLevel}).`
+    : `Experience mismatch: Your level (${resumeLevel}) vs role requirement (${jdLevel}).`;
+  breakdownHtml += `
+    <div class="jd-breakdown-row">
+      <span class="jd-breakdown-icon" style="color:${expColor}">${expIcon}</span>
+      <div class="jd-breakdown-content">
+        <div class="jd-breakdown-label">Experience alignment</div>
+        <div style="font-size:.84rem;color:var(--txt)">${expText}</div>
+      </div>
+    </div>`;
+
+  breakdownEl.innerHTML = breakdownHtml;
+
+  // Layer 3 — Quick Win
+  quickWinEl.innerHTML = `
+    <div class="jd-quick-win">
+      <div class="jd-quick-win-label">Quick Win</div>
+      <div class="jd-quick-win-text">${escapeHtml(data.quick_win)}</div>
+    </div>`;
+
+  // Inflation flags (conditional)
+  const inflationFlags = data.inflation_flags || [];
+  if (inflationFlags.length > 0) {
+    const flagItems = inflationFlags.map(f =>
+      `<div class="jd-inflation-item">• ${escapeHtml(f.skill)}: ${f.required_years} years required, but ${escapeHtml(f.skill)} has only existed since ${f.tech_birth_year} (max ${f.max_possible} years).</div>`
+    ).join('');
+    inflationEl.innerHTML = `
+      <div class="jd-inflation-card">
+        <div class="jd-inflation-title">⚠ JD Quality Flags</div>
+        ${flagItems}
+        <div class="jd-inflation-note">Don't be discouraged — these requirements may be overstated.</div>
+      </div>`;
+  } else {
+    inflationEl.innerHTML = '';
+  }
+}
+
+async function loadJobsFromAnalysis(data) {
+  const jobsSection = document.getElementById('jobs-section');
+  if (!jobsSection) return;
+
+  jobsSection.style.display = 'block';
+
+  // Show the button to find jobs - don't auto-load
+  const feed = document.getElementById('apply-progress-feed');
+  if (feed) feed.innerHTML = '<div>📍 Click "Find Jobs Near You" to search for opportunities</div>';
+}
+
+
+function getPlatformClass(platform) {
+  const p = (platform || '').toLowerCase();
+  if (p.includes('linkedin')) return 'linkedin';
+  if (p.includes('indeed')) return 'indeed';
+  if (p.includes('glassdoor')) return 'glassdoor';
+  if (p.includes('ziprecruiter')) return 'ziprecruiter';
+  return 'other';
+}
+
+function updateSelectionBar() {
+  const cards = [...document.querySelectorAll('.job-card.selected')];
+  const count = cards.length;
+  const linkedinCount = cards.filter(c => c.dataset.platform?.toLowerCase() === 'linkedin').length;
+  
+  const bar = document.getElementById('selection-bar');
+  const countEl = document.getElementById('selection-count');
+  
+  if (count === 0) {
+    bar.style.display = 'none';
+  } else {
+    bar.style.display = 'flex';
+    const linkedinNote = linkedinCount > 0 ? ` (${linkedinCount} LinkedIn)` : '';
+    countEl.textContent = `${count} job${count !== 1 ? 's' : ''} selected${linkedinNote}`;
+  }
+  
+}
+
+function toggleJobSelection(card) {
+  card.classList.toggle('selected');
+  updateSelectionBar();
+}
+
+function renderJobs(jobs, linkedinCount) {
+  const grid = document.getElementById('jobs-grid');
+  const totalEl = document.getElementById('jobs-total-count');
+  const linkedinBadge = document.getElementById('linkedin-badge');
+  
+  if (!grid) return;
+  
+  totalEl.textContent = `${jobs.length} jobs`;
+  linkedinBadge.textContent = `${linkedinCount} LinkedIn`;
+  
+  if (!jobs.length) {
+    grid.innerHTML = '<div class="empty-state">No jobs found. Try different search criteria.</div>';
+    return;
+  }
+  
+  grid.innerHTML = jobs.map((job, idx) => {
+    const platform = job.source_platform || 'Other';
+    const platformClass = getPlatformClass(platform);
+    return `
+    <div class="job-card" data-index="${idx}" data-platform="${platform}" onclick="toggleJobSelection(this)">
+      <div class="job-title">${escapeHtml(job.job_title)}</div>
+      <div class="job-company">${escapeHtml(job.company_name)}</div>
+      <div class="job-location">📍 ${escapeHtml(job.location)}</div>
+      <div class="job-meta">
+        <span class="platform-badge ${platformClass}">${escapeHtml(platform)}</span>
+        <span class="applied-badge">✓ Applied</span>
+      </div>
+      <div class="job-actions" onclick="event.stopPropagation()">
+        <a class="btn btn-outline btn-sm" href="${job.apply_url}" target="_blank" rel="noopener">Apply ↗</a>
+      </div>
+    </div>
+  `}).join('');
+  
+  // Store jobs in state
+  jobsState.allJobs = jobs;
+  updateSelectionBar();
+}
+
+function getSelectedJobs() {
+  const jobs = jobsState.allJobs || [];
+  const cards = [...document.querySelectorAll('.job-card.selected')];
+  return cards.map(card => jobs[parseInt(card.dataset.index)]).filter(Boolean);
+}
+
+function getSelectedLinkedInJobs() {
+  return getSelectedJobs().filter(job => 
+    (job.source_platform || '').toLowerCase() === 'linkedin'
+  );
+}
+
+function showProgress(message, done = false) {
+  const bar = document.getElementById('apply-progress-bar');
+  const text = document.getElementById('apply-progress-text');
+  if (!bar || !text) return;
+  
+  if (done) {
+    bar.style.display = 'none';
+  } else {
+    bar.style.display = 'block';
+    text.textContent = message;
+  }
+}
+
+function markAppliedByTitleCompany(title, company) {
+  const cards = [...document.querySelectorAll('.job-card')];
+  cards.forEach(card => {
+    const t = card.querySelector('.job-title')?.textContent?.trim();
+    const c = card.querySelector('.job-company')?.textContent?.trim();
+    if (t === title && c === company) {
+      const badge = card.querySelector('.applied-badge');
+      if (badge) badge.style.display = 'inline-flex';
+      card.classList.remove('selected');
+    }
+  });
+  updateSelectionBar();
+}
+
+async function openSelectedInTabs() {
+  const jobs = getSelectedJobs();
+  if (!jobs.length) {
+    showProgress('⚠ No jobs selected.');
+    setTimeout(() => showProgress('', true), 2000);
+    return;
+  }
+  
+  showProgress(`Opening ${jobs.length} jobs in new tabs...`);
+  let opened = 0;
+  for (const job of jobs) {
+    if (job.apply_url) {
+      window.open(job.apply_url, '_blank');
+      opened++;
+      await new Promise(r => setTimeout(r, 300));
+    }
+  }
+  showProgress(`✅ Opened ${opened} jobs in your browser`);
+  setTimeout(() => showProgress('', true), 3000);
+}
+
+function attachApplyButtons() {
+  // Select ALL jobs
+  const selectAllBtn = document.getElementById('select-all-jobs');
+  if (selectAllBtn) {
+    selectAllBtn.addEventListener('click', () => {
+      document.querySelectorAll('.job-card').forEach(card => {
+        card.classList.add('selected');
+      });
+      updateSelectionBar();
+    });
+  }
+  
+  // Select all LinkedIn jobs
+  const selectAllLinkedinBtn = document.getElementById('select-all-linkedin');
+  if (selectAllLinkedinBtn) {
+    selectAllLinkedinBtn.addEventListener('click', () => {
+      document.querySelectorAll('.job-card').forEach(card => {
+        if (card.dataset.platform?.toLowerCase() === 'linkedin') {
+          card.classList.add('selected');
+        }
+      });
+      updateSelectionBar();
+    });
+  }
+  
+  // Clear selection
+  const clearBtn = document.getElementById('clear-selection');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      document.querySelectorAll('.job-card.selected').forEach(card => {
+        card.classList.remove('selected');
+      });
+      updateSelectionBar();
+    });
+  }
+  
+  // Open selected in tabs
+  const openSelectedBtn = document.getElementById('open-selected-btn');
+  if (openSelectedBtn) {
+    openSelectedBtn.addEventListener('click', openSelectedInTabs);
+  }
+}
+
+attachApplyButtons();
+
+
+// ── Cover Letter Generation ───────────────────────────────────────────────────
+
+const generateCoverLetterBtn   = document.getElementById('generate-cover-letter-btn');
+const downloadCoverLetterBtn   = document.getElementById('download-cover-letter-btn');
+const regenerateCoverLetterBtn = document.getElementById('regenerate-cover-letter-btn');
+const coverLetterPreview       = document.getElementById('cover-letter-preview');
+const coverLetterText          = document.getElementById('cover-letter-text');
+
+async function generateCoverLetter() {
+  if (!generateCoverLetterBtn) return;
+
+  generateCoverLetterBtn.disabled    = true;
+  generateCoverLetterBtn.textContent = '⏳ Generating...';
+
+  try {
+    const jdText = document.getElementById('jd-textarea')?.value?.trim() || '';
+
+    const res = await fetch('/api/generate-cover-letter', {
+      method : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body   : JSON.stringify({ jd_text: jdText }),
+    });
+
+    const data = await res.json();
+
+    if (data.status !== 'success') {
+      alert('Cover letter generation failed: ' + (data.message || 'Unknown error'));
+      generateCoverLetterBtn.disabled    = false;
+      generateCoverLetterBtn.textContent = '✉ Generate Cover Letter';
+      return;
+    }
+
+    // Store for PDF download
+    _coverLetterData = {
+      cover_letter: data.cover_letter,
+      candidate   : data.candidate,
+      date        : data.date,
+    };
+
+    // Show preview
+    if (coverLetterText)    coverLetterText.textContent   = data.cover_letter;
+    if (coverLetterPreview) coverLetterPreview.style.display = 'block';
+
+    coverLetterPreview.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    generateCoverLetterBtn.disabled    = false;
+    generateCoverLetterBtn.textContent = '✉ Generate Cover Letter';
+
+  } catch (err) {
+    alert('Server error: ' + err.message);
+    generateCoverLetterBtn.disabled    = false;
+    generateCoverLetterBtn.textContent = '✉ Generate Cover Letter';
+  }
+}
+
+async function downloadCoverLetterPDF() {
+  if (!_coverLetterData) {
+    alert('Please generate a cover letter first.');
+    return;
+  }
+
+  if (!downloadCoverLetterBtn) return;
+
+  downloadCoverLetterBtn.disabled    = true;
+  downloadCoverLetterBtn.textContent = '⏳ Generating PDF...';
+
+  try {
+    const res = await fetch('/api/download-cover-letter', {
+      method : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body   : JSON.stringify(_coverLetterData),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: 'PDF generation failed' }));
+      alert('PDF error: ' + (err.message || 'Unknown error'));
+      downloadCoverLetterBtn.disabled    = false;
+      downloadCoverLetterBtn.textContent = '⬇ Download as PDF';
+      return;
+    }
+
+    // Trigger browser download
+    const blob     = await res.blob();
+    const url      = URL.createObjectURL(blob);
+    const a        = document.createElement('a');
+    const name     = (_coverLetterData.candidate?.name || 'Candidate').replace(/\s+/g, '_');
+    a.href         = url;
+    a.download     = `Cover_Letter_${name}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+  } catch (err) {
+    alert('Download error: ' + err.message);
+  }
+
+  downloadCoverLetterBtn.disabled    = false;
+  downloadCoverLetterBtn.textContent = '⬇ Download as PDF';
+}
+
+if (generateCoverLetterBtn) {
+  generateCoverLetterBtn.addEventListener('click', generateCoverLetter);
+}
+
+if (regenerateCoverLetterBtn) {
+  regenerateCoverLetterBtn.addEventListener('click', generateCoverLetter);
+}
+
+if (downloadCoverLetterBtn) {
+  downloadCoverLetterBtn.addEventListener('click', downloadCoverLetterPDF);
 }

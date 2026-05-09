@@ -18,6 +18,10 @@ import re
 import json
 import base64
 import uuid
+import time
+import atexit
+import signal
+import sys
 import requests
 from pathlib import Path
 
@@ -39,7 +43,7 @@ def _load_env(env_path='.env'):
 
 _load_env()
 
-from flask import Flask, request, jsonify, render_template, send_from_directory
+from flask import Flask, request, jsonify, render_template, send_from_directory, session, Response, stream_with_context
 import joblib
 import numpy as np
 
@@ -51,17 +55,71 @@ from utils.parser import (
     compute_job_matches, compute_skill_gaps,
     get_project_ideas,
     extract_skills_by_keyword, merge_skills,
+    compute_jd_match, generate_quick_win,
 )
+
+# ─── Cover Letter ──────────────────────────────────────────────────────────────
+from cover_letter import generate_cover_letter
 
 # ─── App Setup ────────────────────────────────────────────────────────────────
 app = Flask(__name__, template_folder='templates', static_folder='static')
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 app.config['UPLOAD_FOLDER']      = Path('uploads')
 app.config['UPLOAD_FOLDER'].mkdir(exist_ok=True)
+app.secret_key = os.environ.get('SECRET_KEY', 'resume-analyzer-dev-key')
 
 ALLOWED         = {'pdf'}
 YOUTUBE_API_KEY = os.environ.get('YOUTUBE_API_KEY', '')
+JSEARCH_API_KEY = os.environ.get('JSEARCH_API_KEY', '')
 MODEL_DIR       = Path(r'notebooks\models')
+UPLOAD_TTL_SECONDS = 3 * 60 * 60
+_LAST_UPLOAD_CLEANUP_CHECK = 0.0
+_SHUTDOWN_IN_PROGRESS = False
+
+
+def _cleanup_expired_uploads(max_age_seconds: int = UPLOAD_TTL_SECONDS) -> int:
+    now = time.time()
+    removed = 0
+    for pdf in app.config['UPLOAD_FOLDER'].glob('*.pdf'):
+        try:
+            if now - pdf.stat().st_mtime > max_age_seconds:
+                pdf.unlink()
+                removed += 1
+        except FileNotFoundError:
+            continue
+    return removed
+
+
+def _cleanup_all_uploads() -> int:
+    removed = 0
+    for pdf in app.config['UPLOAD_FOLDER'].glob('*.pdf'):
+        try:
+            pdf.unlink()
+            removed += 1
+        except FileNotFoundError:
+            continue
+    return removed
+
+
+def _graceful_shutdown_cleanup(*_args):
+    global _SHUTDOWN_IN_PROGRESS
+    if _SHUTDOWN_IN_PROGRESS:
+        return
+    _SHUTDOWN_IN_PROGRESS = True
+
+    removed = _cleanup_all_uploads()
+    if removed:
+        print(f"  Graceful shutdown cleanup removed {removed} upload file(s)")
+    print("  Shutting down...")
+    sys.exit(0)
+
+
+atexit.register(_graceful_shutdown_cleanup)
+try:
+    signal.signal(signal.SIGTERM, _graceful_shutdown_cleanup)
+    signal.signal(signal.SIGINT, _graceful_shutdown_cleanup)
+except Exception:
+    pass
 
 
 def load_models():
@@ -101,10 +159,63 @@ ner_status = 'BERT NER ✓' if models['ner_extractor'] else 'Regex fallback (BER
 print(f"Ready!  ML: {models['mode']} | Extraction: {ner_status}")
 print(f"  YouTube API : {'configured ✓' if YOUTUBE_API_KEY else 'not set'}")
 print(f"  Gemini API  : {'configured ✓ (edu/exp extraction)' if os.environ.get('GEMINI_API_KEY') else 'not set (regex fallback for edu/exp)'}")
+print(f"  Groq API    : {'configured ✓ (cover letter generation)' if os.environ.get('GROQ_API_KEY') else 'not set (cover letter unavailable)'}")
 
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED
+
+
+def _build_job_search_query(category: str, top_categories: list = None, experience_level: str = None) -> str:
+    # JSearch works best with short queries (3-6 words).
+    # Strategy: merge ML top prediction + job match roles, deduplicate, pick best 2.
+    top_categories = [str(c).strip() for c in (top_categories or []) if str(c).strip()]
+    clean_category = (category or '').strip()
+
+    # ML top prediction first, then job match roles, deduplicated
+    seen, merged = set(), []
+    for role in ([clean_category] + top_categories):
+        if role and role.lower() not in seen:
+            seen.add(role.lower())
+            merged.append(role)
+        if len(merged) == 2:
+            break
+    roles = merged or ['Software Engineer']
+    role_part = ' OR '.join(roles)
+
+    level = (experience_level or '').strip().lower()
+    if 'fresher' in level or 'intern' in level:
+        return f"Fresher {role_part}"
+    elif level == 'junior':
+        return f"Junior {role_part}"
+    elif level == 'mid-level':
+        return f"Mid {role_part}"
+    elif level == 'senior':
+        return f"Senior {role_part}"
+    return role_part
+
+
+def _normalize_job_source(publisher: str) -> str:
+    publisher_l = (publisher or '').lower()
+    if 'linkedin' in publisher_l:
+        return 'LinkedIn'
+    if 'indeed' in publisher_l:
+        return 'Indeed'
+    return ''
+
+
+def _format_job_item(job: dict, source: str) -> dict:
+    city = (job.get('job_city') or '').strip()
+    country = (job.get('job_country') or '').strip()
+    location = ', '.join([v for v in [city, country] if v]) or (job.get('job_location') or 'Location not specified')
+    title = job.get('job_title') or 'Untitled role'
+    return {
+        'job_title': title,
+        'company_name': job.get('employer_name') or 'Unknown company',
+        'location': location,
+        'apply_url': job.get('job_apply_link') or job.get('job_google_link') or '',
+        'source_platform': source,
+    }
 
 
 # ─── Course Recommendations ───────────────────────────────────────────────────
@@ -360,6 +471,12 @@ def api_model_info():
 
 @app.route('/api/analyze', methods=['POST'])
 def api_analyze():
+    global _LAST_UPLOAD_CLEANUP_CHECK
+    now = time.time()
+    if now - _LAST_UPLOAD_CLEANUP_CHECK > 300:
+        _cleanup_expired_uploads()
+        _LAST_UPLOAD_CLEANUP_CHECK = now
+
     if 'resume' not in request.files:
         return jsonify({'status': 'error', 'message': 'No file provided.'}), 400
     file = request.files['resume']
@@ -375,6 +492,9 @@ def api_analyze():
         raw_text = extract_text_from_pdf(str(tmp_path))
         if not raw_text.strip():
             return jsonify({'status': 'error', 'message': 'Could not extract text. Ensure the PDF is not a scanned image.'}), 422
+
+        # Store resume text in session for JD matching
+        session['resume_text'] = raw_text[:8000]
 
         pages      = count_pages(str(tmp_path))
         word_count = len(raw_text.split())
@@ -451,6 +571,23 @@ def api_analyze():
         with open(tmp_path, 'rb') as f:
             pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
 
+        resume_payload = {
+            'name': name,
+            'email': email,
+            'phone': phone,
+            'category': predicted_category,
+            'experience_level': level,
+            'skills': [s['text'] if isinstance(s, dict) else s for s in skill_items],
+            'years_of_experience': ner_results.get('years_of_experience', ''),
+            'experience_entries': ner_results.get('experience_entries', []),
+            'education_entries': ner_results.get('education_entries', []),
+            'uploaded_pdf_path': str(tmp_path),
+            'uploaded_pdf_name': file.filename,
+        }
+        session['resume_apply_data'] = resume_payload
+        session['uploaded_resume_path'] = str(tmp_path)
+        session['job_matches'] = job_matches
+
         return jsonify({
             'status'   : 'success',
             'extracted': {
@@ -490,8 +627,157 @@ def api_analyze():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
     finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
+        pass
+
+
+@app.route('/api/cleanup-resume', methods=['POST'])
+def api_cleanup_resume():
+    _cleanup_expired_uploads()
+    resume_path = session.get('uploaded_resume_path')
+    deleted = False
+    if resume_path:
+        p = Path(resume_path)
+        if p.exists():
+            p.unlink()
+            deleted = True
+    session.pop('uploaded_resume_path', None)
+    session.pop('resume_apply_data', None)
+    return jsonify({'status': 'success', 'deleted': deleted})
+
+
+@app.route('/api/cleanup-uploads', methods=['POST'])
+def api_cleanup_uploads():
+    removed = _cleanup_all_uploads()
+    session.pop('uploaded_resume_path', None)
+    session.pop('resume_apply_data', None)
+    return jsonify({'status': 'success', 'deleted_count': removed})
+
+
+@app.route('/api/jobs')
+def api_jobs():
+    try:
+        location = request.args.get('location', '').strip()
+        country = request.args.get('country', 'us').strip().lower() or 'us'
+
+        if not JSEARCH_API_KEY:
+            return jsonify({
+                'status': 'setup_required',
+                'message': 'JSEARCH_API_KEY is missing. Add it to your .env file and restart the app.',
+                'linkedin_jobs': [],
+                'indeed_jobs': [],
+            }), 200
+
+        resume_data = session.get('resume_apply_data')
+        if not resume_data:
+            return jsonify({'status': 'error', 'message': 'No resume data in session. Analyze a resume first.'}), 400
+
+        category = resume_data.get('category', 'Software Engineer')
+        experience_level = resume_data.get('experience_level', '')
+        job_matches_data = session.get('job_matches')
+        top_categories = [m['role'] for m in (job_matches_data or [])[:3]]
+
+        query = _build_job_search_query(
+            category=category,
+            top_categories=top_categories,
+            experience_level=experience_level,
+        )
+        print(f"[JOB SEARCH] Query: {query}, Level: {experience_level}, Location: {location or 'Not specified'}, Country: {country}")
+
+        endpoint = "https://jsearch.p.rapidapi.com/search"
+        headers = {
+            'x-rapidapi-key': JSEARCH_API_KEY,
+            'x-rapidapi-host': 'jsearch.p.rapidapi.com',
+        }
+
+        collected_linkedin = []
+        collected_indeed = []
+
+        # Parse cities if there are multiple (separated by OR)
+        cities = [c.strip() for c in location.split(' OR ')] if location else ['']
+        print(f"[JOB SEARCH] Searching in cities: {cities}")
+
+        for city in cities:
+            if len(collected_linkedin) >= 30:  # Only LinkedIn, max 30 jobs
+                break
+
+            page = 1
+            max_pages = 1  # Only 1 page per city
+
+            while page <= max_pages and len(collected_linkedin) < 30:
+                params = {
+                    'query': query,
+                    'page': page,
+                    'num_pages': 1,
+                    'date_posted': 'week',
+                }
+
+                # Add location (single city, not OR-separated)
+                if city:
+                    params['query'] = f"{query} in {city}"
+                    print(f"[JOB SEARCH] Fetching page {page} for city: {city}")
+
+                # Add country only if specified
+                if country:
+                    params['country'] = country
+
+                # Retry logic for network issues
+                max_retries = 2
+                for attempt in range(max_retries):
+                    try:
+                        response = requests.get(endpoint, headers=headers, params=params, timeout=(5, 20))
+                        break
+                    except requests.exceptions.ReadTimeout:
+                        if attempt < max_retries - 1:
+                            print(f"[JOB SEARCH] Timeout on attempt {attempt + 1}, retrying...")
+                            time.sleep(1)
+                            continue
+                        else:
+                            print(f"[JOB SEARCH ERROR] All retry attempts exhausted (timeout)")
+                            continue
+                    except requests.exceptions.RequestException as e:
+                        print(f"[JOB SEARCH ERROR] Network error: {str(e)}")
+                        continue
+
+                if response.status_code != 200:
+                    print(f"[JOB SEARCH ERROR] JSearch API returned {response.status_code}: {response.text[:200]}")
+                    page += 1
+                    continue
+
+                payload = response.json()
+                jobs = payload.get('data', [])
+                if not jobs:
+                    print(f"[JOB SEARCH] No jobs found in {city} on page {page}")
+                    break
+
+                print(f"[JOB SEARCH] Found {len(jobs)} jobs in {city} on page {page}")
+
+                for job in jobs:
+                    if len(collected_linkedin) >= 50:
+                        break
+                    source = _normalize_job_source(job.get('job_publisher'))
+                    formatted_job = _format_job_item(job, source or job.get('job_publisher', 'Other'))
+                    collected_linkedin.append(formatted_job)
+
+                page += 1
+
+        # Sort: LinkedIn first, then by match percentage
+        def sort_key(j):
+            return 1 if j.get('source_platform', '').lower() == 'linkedin' else 0
+        
+        collected_linkedin.sort(key=sort_key, reverse=True)
+
+        linkedin_count = sum(1 for j in collected_linkedin if j.get('source_platform', '').lower() == 'linkedin')
+        print(f"[JOB SEARCH] Found {len(collected_linkedin)} total jobs ({linkedin_count} LinkedIn)")
+        return jsonify({
+            'status': 'success',
+            'query': query,
+            'jobs': collected_linkedin[:50],
+            'linkedin_count': linkedin_count,
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': f'Failed to fetch jobs: {str(e)}'}), 502
 
 
 @app.route('/api/demo')
@@ -575,10 +861,285 @@ def api_demo():
     })
 
 
+@app.route('/api/jd-match', methods=['POST'])
+def api_jd_match():
+    """Analyze resume against job description and return match analysis."""
+    try:
+        data = request.get_json()
+        jd_text = data.get('jd_text', '') if data else ''
+        resume_text = session.get('resume_text', '')
+
+        if not jd_text:
+            return jsonify({'status': 'error', 'message': 'Please paste a job description to analyze.'}), 400
+        if not resume_text:
+            return jsonify({'status': 'error', 'message': 'Please upload a resume first before analyzing JD match.'}), 400
+
+        # Compute match analysis
+        match_result = compute_jd_match(resume_text, jd_text)
+
+        # Generate quick win tip
+        quick_win = generate_quick_win(
+            resume_text,
+            match_result['genuine_gaps'],
+            match_result['implied_matches'],
+            jd_text,
+            match_result['verdict']
+        )
+
+        # Store JD text in session so cover letter can use it
+        session['last_jd_text'] = jd_text[:3000]
+
+        return jsonify({
+            'status': 'success',
+            'verdict': match_result['verdict'],
+            'hard_coverage': match_result['hard_coverage'],
+            'breakdown': {
+                'direct_matches': match_result['direct_matches'],
+                'implied_matches': match_result['implied_matches'],
+                'genuine_gaps': match_result['genuine_gaps'],
+                'exp_aligned': match_result['exp_aligned'],
+                'resume_level': match_result['resume_level'],
+                'jd_level': match_result['jd_level'],
+            },
+            'quick_win': quick_win,
+            'inflation_flags': match_result['inflation_flags'],
+            'preferred_gaps': match_result['preferred_gaps'],
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ─── Cover Letter Route ───────────────────────────────────────────────────────
+
+@app.route('/api/generate-cover-letter', methods=['POST'])
+def api_generate_cover_letter():
+    """
+    Generate a cover letter from resume data + JD text.
+    Returns:
+      - cover_letter text (for preview in browser)
+      - candidate info (for PDF header)
+    Also supports PDF download via ?format=pdf query param.
+    """
+    try:
+        resume_data = session.get('resume_apply_data')
+        if not resume_data:
+            return jsonify({'status': 'error', 'message': 'No resume data found. Please analyze a resume first.'}), 400
+
+        # JD text: prefer body payload, fall back to session (from jd-match)
+        body = request.get_json(silent=True) or {}
+        jd_text = body.get('jd_text', '') or session.get('last_jd_text', '')
+
+        if not jd_text:
+            return jsonify({'status': 'error', 'message': 'No job description found. Please run JD Match first.'}), 400
+
+        result = generate_cover_letter(resume_data, jd_text)
+
+        if not result['success']:
+            return jsonify({'status': 'error', 'message': result['error']}), 500
+
+        return jsonify({
+            'status'       : 'success',
+            'cover_letter' : result['cover_letter'],
+            'candidate'    : result['candidate'],
+            'date'         : result['date'],
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/download-cover-letter', methods=['POST'])
+def api_download_cover_letter():
+    """
+    Generate PDF from cover letter text using ReportLab (pure Python, no system deps).
+    Expects JSON body: { cover_letter, candidate, date }
+    Returns: PDF file as attachment.
+    """
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_JUSTIFY
+        import io
+    except ImportError:
+        return jsonify({'status': 'error', 'message': 'ReportLab not installed. Run: pip install reportlab'}), 500
+
+    try:
+        body = request.get_json()
+        if not body:
+            return jsonify({'status': 'error', 'message': 'No data provided.'}), 400
+
+        cover_letter_text = body.get('cover_letter', '')
+        candidate         = body.get('candidate', {})
+        letter_date       = body.get('date', '')
+
+        if not cover_letter_text:
+            return jsonify({'status': 'error', 'message': 'Cover letter text is required.'}), 400
+
+        candidate_name  = candidate.get('name', 'Candidate')
+        candidate_email = candidate.get('email', '')
+        candidate_phone = candidate.get('phone', '')
+
+        # ── Build PDF in memory ───────────────────────────────────────────────
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            leftMargin=22*mm, rightMargin=22*mm,
+            topMargin=20*mm, bottomMargin=20*mm,
+        )
+
+        # ── Colour palette ────────────────────────────────────────────────────
+        VIOLET  = colors.HexColor('#7c3aed')
+        DARK    = colors.HexColor('#0f172a')
+        MID     = colors.HexColor('#1e293b')
+        GREY    = colors.HexColor('#64748b')
+
+        # ── Styles ────────────────────────────────────────────────────────────
+        styles = getSampleStyleSheet()
+
+        name_style = ParagraphStyle(
+            'CandidateName',
+            fontName='Helvetica-Bold',
+            fontSize=18,
+            textColor=DARK,
+            leading=22,
+            spaceAfter=2,
+        )
+        contact_style = ParagraphStyle(
+            'Contact',
+            fontName='Helvetica',
+            fontSize=9,
+            textColor=GREY,
+            leading=13,
+        )
+        date_style = ParagraphStyle(
+            'Date',
+            fontName='Helvetica',
+            fontSize=10,
+            textColor=GREY,
+            spaceBefore=14,
+            spaceAfter=14,
+        )
+        body_style = ParagraphStyle(
+            'Body',
+            fontName='Helvetica',
+            fontSize=10.5,
+            textColor=MID,
+            leading=17,
+            spaceAfter=10,
+            alignment=TA_JUSTIFY,
+        )
+        closing_style = ParagraphStyle(
+            'Closing',
+            fontName='Helvetica',
+            fontSize=10.5,
+            textColor=MID,
+            leading=17,
+            spaceBefore=16,
+            spaceAfter=36,
+        )
+        sig_style = ParagraphStyle(
+            'Signature',
+            fontName='Helvetica-Bold',
+            fontSize=12,
+            textColor=DARK,
+            leading=16,
+        )
+        footer_style = ParagraphStyle(
+            'Footer',
+            fontName='Helvetica',
+            fontSize=7.5,
+            textColor=GREY,
+            alignment=1,  # centre
+            spaceBefore=20,
+        )
+
+        # ── Build story ───────────────────────────────────────────────────────
+        story = []
+
+        # Top accent rule (violet)
+        story.append(HRFlowable(
+            width='100%', thickness=4,
+            color=VIOLET, spaceAfter=16,
+        ))
+
+        # Candidate name
+        story.append(Paragraph(candidate_name, name_style))
+
+        # Contact line
+        contact_parts = [p for p in [candidate_email, candidate_phone] if p]
+        if contact_parts:
+            story.append(Paragraph('  ·  '.join(contact_parts), contact_style))
+
+        # Thin separator rule
+        story.append(HRFlowable(
+            width='100%', thickness=0.5,
+            color=colors.HexColor('#e2e8f0'),
+            spaceBefore=12, spaceAfter=4,
+        ))
+
+        # Date
+        if letter_date:
+            story.append(Paragraph(letter_date, date_style))
+
+        # Body paragraphs — split on newlines
+        paragraphs = [p.strip() for p in cover_letter_text.split('\n') if p.strip()]
+        for para in paragraphs:
+            story.append(Paragraph(para, body_style))
+
+        # Closing
+        story.append(Paragraph('Sincerely,', closing_style))
+
+        # Signature rule + name
+        story.append(HRFlowable(
+            width=60*mm, thickness=1.5,
+            color=VIOLET, spaceAfter=8,
+        ))
+        story.append(Paragraph(candidate_name, sig_style))
+
+        # Footer
+        story.append(HRFlowable(
+            width='100%', thickness=0.5,
+            color=colors.HexColor('#e2e8f0'),
+            spaceBefore=24, spaceAfter=6,
+        ))
+        story.append(Paragraph('Generated by ResumeAI · AI-Powered Resume Analyzer', footer_style))
+
+        # ── Render ────────────────────────────────────────────────────────────
+        doc.build(story)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+
+        safe_name = candidate_name.replace(' ', '_')
+        filename  = f"Cover_Letter_{safe_name}.pdf"
+
+        return Response(
+            pdf_bytes,
+            mimetype='application/pdf',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Content-Type': 'application/pdf',
+            }
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 @app.route('/static/<path:filename>')
 def serve_static(filename):
     return send_from_directory('static', filename)
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000, use_reloader=False)

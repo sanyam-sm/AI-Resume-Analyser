@@ -384,6 +384,239 @@
       text-align: center; margin-top: 20px;
     }
     .demo-strip span { color: var(--txt2); font-size: .85rem; margin-right: 8px; }
+
+    /* ── JD Match Section ─────────────────────────────────────────────────── */
+    #jd-section { margin-bottom: 20px; }
+    .jd-textarea {
+      width: 100%;
+      min-height: 150px;
+      background: var(--surface);
+      color: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      font-family: var(--font-b);
+      font-size: .9rem;
+      line-height: 1.5;
+      resize: vertical;
+      transition: border-color .2s;
+    }
+    .jd-textarea:focus {
+      outline: none;
+      border-color: var(--violet);
+    }
+    .jd-textarea::placeholder { color: var(--txt3); }
+    .jd-btn-row { display: flex; gap: 10px; margin-top: 14px; }
+    .jd-verdict-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .jd-verdict-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+    .jd-verdict-label { font-family: var(--font-h); font-size: 1.1rem; font-weight: 700; }
+    .jd-verdict-badge {
+      font-size: .72rem; font-weight: 600; padding: 4px 12px;
+      border-radius: 100px; text-transform: uppercase; letter-spacing: .04em;
+    }
+    .jd-verdict-desc { font-size: .88rem; color: var(--txt2); margin-bottom: 20px; }
+    .jd-breakdown-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 14px; }
+    .jd-breakdown-icon { font-size: 1rem; flex-shrink: 0; margin-top: 2px; }
+    .jd-breakdown-label { font-size: .82rem; font-weight: 600; color: var(--txt2); margin-bottom: 6px; }
+    .jd-breakdown-content { flex: 1; }
+    .jd-pill {
+      display: inline-block;
+      font-size: .78rem; font-weight: 500;
+      padding: 4px 10px; border-radius: 6px;
+      margin: 2px 4px 2px 0;
+    }
+    .jd-pill.green { background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.2); color: var(--emerald); }
+    .jd-pill.rose { background: rgba(244,63,94,.1); border: 1px solid rgba(244,63,94,.2); color: var(--rose); }
+    .jd-quick-win {
+      background: var(--surface);
+      border-left: 3px solid var(--violet);
+      border-radius: 0 8px 8px 0;
+      padding: 14px 16px;
+      margin-top: 16px;
+    }
+    .jd-quick-win-label {
+      font-size: .68rem; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--violet2); margin-bottom: 6px;
+    }
+    .jd-quick-win-text { font-size: .88rem; color: var(--txt); line-height: 1.5; }
+    .jd-inflation-card {
+      background: rgba(245,158,11,.06);
+      border: 1px solid rgba(245,158,11,.2);
+      border-radius: var(--r);
+      padding: 14px 16px;
+      margin-top: 16px;
+    }
+    .jd-inflation-title {
+      font-size: .82rem; font-weight: 700; color: var(--amber); margin-bottom: 8px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .jd-inflation-item { font-size: .82rem; color: var(--txt2); margin-bottom: 4px; }
+    .jd-inflation-note { font-size: .78rem; color: var(--txt3); margin-top: 8px; font-style: italic; }
+
+    /* ── Cover Letter Section ─────────────────────────────────────────────── */
+    .cover-letter-divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 24px 0;
+    }
+    .cover-letter-section-title {
+      font-family: var(--font-h); font-size: .78rem; font-weight: 700;
+      letter-spacing: .08em; text-transform: uppercase;
+      color: var(--txt3); margin-bottom: 14px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .cover-letter-section-title .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--violet2); }
+
+    #cover-letter-preview {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 24px;
+      margin-top: 16px;
+      display: none;
+    }
+    .cover-letter-text {
+      font-size: .9rem;
+      line-height: 1.8;
+      color: var(--txt);
+      white-space: pre-wrap;
+      font-family: var(--font-b);
+    }
+    .cover-letter-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+    .btn-emerald {
+      background: linear-gradient(135deg, #059669, var(--emerald));
+      color: #fff;
+      box-shadow: 0 4px 16px rgba(16,185,129,.3);
+    }
+    .btn-emerald:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(16,185,129,.4); }
+
+    /* ── Job Listings Section ───────────────────────────────────────────── */
+    .jobs-section { margin-bottom: 20px; }
+    .jobs-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+    @media (max-width: 900px) { .jobs-panels { grid-template-columns: 1fr; } }
+    .jobs-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+    .jobs-count { font-size:.8rem; color:var(--txt2); }
+    .jobs-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; margin-bottom:14px; }
+    @media (max-width: 600px) { .jobs-grid { grid-template-columns:1fr; } }
+    .job-card {
+      background: var(--surface);
+      border: 2px solid var(--border);
+      border-radius: var(--r);
+      padding: 14px;
+      position: relative;
+      cursor: pointer;
+      transition: all .2s ease;
+    }
+    .job-card:hover { border-color: var(--violet); transform: translateY(-2px); }
+    .job-card.selected {
+      background: rgba(124,58,237,.12);
+      border-color: var(--violet);
+      box-shadow: 0 0 0 3px rgba(124,58,237,.2);
+    }
+    .job-card.selected::after {
+      content: '✓';
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 22px;
+      height: 22px;
+      background: var(--violet);
+      color: #fff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: .75rem;
+      font-weight: 700;
+    }
+    .job-title { font-weight:700; font-size:.9rem; margin-bottom:4px; padding-right:30px; }
+    .job-company { font-size:.8rem; color:var(--txt2); margin-bottom:2px; }
+    .job-location { font-size:.78rem; color:var(--txt3); margin-bottom:6px; }
+    .job-meta { display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
+    .platform-badge {
+      font-size:.68rem;
+      font-weight:600;
+      padding: 2px 8px;
+      border-radius: 10px;
+      text-transform: uppercase;
+      letter-spacing: .3px;
+    }
+    .platform-badge.linkedin { background: #0077b5; color: #fff; }
+    .platform-badge.indeed { background: #2164f3; color: #fff; }
+    .platform-badge.glassdoor { background: #0caa41; color: #fff; }
+    .platform-badge.ziprecruiter { background: #5ba829; color: #fff; }
+    .platform-badge.other { background: var(--txt3); color: #fff; }
+    .job-actions { display:flex; align-items:center; justify-content:space-between; margin-top:10px; }
+    .applied-badge {
+      display:none;
+      font-size:.72rem;
+      font-weight:600;
+      color: var(--emerald);
+      background: rgba(16,185,129,.12);
+      border: 1px solid rgba(16,185,129,.2);
+      padding: 3px 8px;
+      border-radius: 100px;
+    }
+    .selection-bar {
+      position: sticky;
+      bottom: 20px;
+      background: var(--card);
+      border: 1px solid var(--violet);
+      border-radius: var(--r);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 4px 20px rgba(0,0,0,.3);
+      margin-top: 16px;
+      z-index: 10;
+    }
+    .selection-bar .selection-actions { display: flex; gap: 8px; }
+    #selection-count { font-weight: 600; color: var(--violet); }
+    .btn-xs { padding: 4px 10px; font-size: .72rem; }
+    .skeleton {
+      height: 120px;
+      border-radius: var(--r);
+      background: linear-gradient(90deg, rgba(255,255,255,.02), rgba(255,255,255,.07), rgba(255,255,255,.02));
+      background-size: 200% 100%;
+      animation: shimmer 1.2s infinite linear;
+      border: 1px solid var(--border);
+    }
+    @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+    .spinner-small {
+      width: 16px;
+      height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--violet);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .apply-progress-bar { transition: all .2s; }
+    .risk-modal {
+      position: fixed; inset: 0; display:none; z-index: 999;
+      background: rgba(0,0,0,.6); align-items:center; justify-content:center;
+    }
+    .risk-modal-card {
+      width:min(520px,92vw); background:var(--card); border:1px solid var(--border); border-radius:var(--r2); padding:22px;
+    }
+    .risk-modal-card h3 { font-family:var(--font-h); margin-bottom:8px; }
+    .risk-modal-card p { font-size:.88rem; color:var(--txt2); margin-bottom:16px; line-height:1.6; }
+    .risk-modal-actions { display:flex; gap:10px; justify-content:flex-end; }
+    .location-input {
+      width: 100%; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 6px; color: #fff; font-family: var(--font-b); font-size: .9rem;
+      transition: border-color .2s;
+    }
+    .location-input:focus {
+      outline: none; border-color: var(--violet);
+    }
+    .location-input::placeholder { color: var(--txt3); }
   </style>
 </head>
 <body>
@@ -460,6 +693,54 @@
     <!-- Row 4: Extracted Details (education, experience, locations) -->
     <div class="card animate d5" id="card-ner-entities" style="margin-bottom:20px;"></div>
 
+    <!-- JD Match Section (hidden on load, shown after resume is analyzed) -->
+    <div id="jd-section" style="display:none;">
+      <!-- JD Input Card -->
+      <div class="card animate" id="card-jd-input" style="margin-bottom:20px;">
+        <div class="card-title"><span class="dot" style="background:var(--violet)"></span>Job Description Match</div>
+        <p style="font-size:.88rem;color:var(--txt2);margin-bottom:14px;">Paste a job description below to see how well your resume matches the requirements.</p>
+        <textarea class="jd-textarea" id="jd-textarea" placeholder="Paste job description here...&#10;&#10;Example:&#10;Requirements:&#10;- 3+ years of Python experience&#10;- Experience with machine learning frameworks (TensorFlow, PyTorch)&#10;- Strong SQL skills&#10;&#10;Nice to have:&#10;- Experience with cloud platforms (AWS, GCP)&#10;- Knowledge of Docker and Kubernetes"></textarea>
+        <div class="jd-btn-row">
+          <button class="btn btn-primary" id="jd-analyze-btn">Analyze Match</button>
+          <button class="btn btn-outline" id="jd-clear-btn">Clear</button>
+        </div>
+      </div>
+
+      <!-- JD Results Card (hidden until analysis) -->
+      <div class="card animate" id="card-jd-results" style="margin-bottom:20px;display:none;">
+        <div class="card-title"><span class="dot" style="background:var(--emerald)"></span>Match Analysis</div>
+        <div id="jd-verdict"></div>
+        <div id="jd-breakdown"></div>
+        <div id="jd-quick-win"></div>
+        <div id="jd-inflation-flags"></div>
+
+        <!-- ── Cover Letter Section ── -->
+        <hr class="cover-letter-divider">
+        <div class="cover-letter-section-title">
+          <span class="dot"></span>Cover Letter Generator
+        </div>
+        <p style="font-size:.85rem;color:var(--txt2);margin-bottom:14px;">
+          Generate a tailored cover letter based on your resume and the job description above.
+        </p>
+        <button class="btn btn-primary" id="generate-cover-letter-btn">
+          ✉ Generate Cover Letter
+        </button>
+
+        <!-- Preview area — hidden until generated -->
+        <div id="cover-letter-preview">
+          <div class="cover-letter-text" id="cover-letter-text"></div>
+          <div class="cover-letter-actions">
+            <button class="btn btn-emerald" id="download-cover-letter-btn">
+              ⬇ Download as PDF
+            </button>
+            <button class="btn btn-outline btn-sm" id="regenerate-cover-letter-btn">
+              ↺ Regenerate
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Row 5: Job Role Match + Skill Gaps -->
     <div class="grid-2">
       <div class="card animate" id="card-job-matches"></div>
@@ -472,6 +753,47 @@
     <!-- Row 7: Courses -->
     <div class="card animate" id="card-courses" style="margin-bottom:20px;"></div>
 
+    <!-- Job Listings -->
+    <div id="jobs-section" class="jobs-section" style="display:none;">
+      <div class="card animate" style="margin-bottom:20px;">
+        <div class="card-title"><span class="dot" style="background:var(--emerald)"></span>Nearby Jobs</div>
+        <button class="btn btn-primary" id="find-jobs-btn" style="margin-bottom:20px;width:100%">🔍 Find Jobs Near You</button>
+        
+        <div id="jobs-panel">
+          <!-- Top bar with counts and actions -->
+          <div class="jobs-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="jobs-count" id="jobs-total-count" style="font-weight:600;">0 jobs</span>
+              <span id="linkedin-badge" class="platform-count" style="background:#0077b5;color:#fff;padding:2px 8px;border-radius:12px;font-size:.75rem;">0 LinkedIn</span>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button class="btn btn-outline btn-xs" id="select-all-jobs">Select All</button>
+              <button class="btn btn-outline btn-xs" id="select-all-linkedin">LinkedIn Only</button>
+              <button class="btn btn-outline btn-xs" id="clear-selection">Clear</button>
+              <span style="color:var(--txt3);font-size:.7rem;">|</span>
+              <button class="btn btn-outline btn-sm" id="open-selected-btn">📂 Open Tabs</button>
+            </div>
+          </div>
+          
+          <!-- Progress bar (inline, shows when applying) -->
+          <div id="apply-progress-bar" class="apply-progress-bar" style="display:none;margin-bottom:12px;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div class="spinner-small"></div>
+              <span id="apply-progress-text" style="font-size:.85rem;color:var(--txt);">Applying...</span>
+            </div>
+          </div>
+          
+          <!-- Selection count bar -->
+          <div id="selection-bar" class="selection-bar-inline" style="display:none;margin-bottom:12px;padding:8px 12px;background:rgba(124,58,237,.1);border:1px solid var(--violet);border-radius:8px;">
+            <span id="selection-count" style="font-size:.85rem;color:var(--violet);font-weight:500;">0 selected</span>
+          </div>
+          
+          <!-- Jobs grid -->
+          <div class="jobs-grid" id="jobs-grid"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- PDF Preview -->
     <div class="card animate" id="card-pdf" style="margin-bottom:20px; display:none;">
       <div class="card-title"><span class="dot" style="background:var(--violet)"></span>PDF Preview</div>
@@ -483,6 +805,26 @@
   <footer>
     <p>ResumeAI · ML + Gemini Powered · Trained on the <a href="https://www.kaggle.com/datasets/snehaanbhawal/resume-dataset" target="_blank">Kaggle Resume Dataset</a> · Built with Flask + HuggingFace Transformers</p>
   </footer>
+
+  <div class="risk-modal" id="location-modal" style="display:none">
+    <div class="risk-modal-card">
+      <h3>📍 Where are you located?</h3>
+      <p style="font-size:.88rem;color:var(--txt2);margin-bottom:16px;">We'll search for jobs in your city and nearby locations.</p>
+
+      <div style="display:flex;gap:8px;margin-bottom:14px;">
+        <button class="btn btn-primary btn-sm" id="detect-location-btn" style="flex:1">🎯 Detect Location</button>
+        <button class="btn btn-outline btn-sm" id="skip-location-btn" style="flex:1">⏭ Skip for Now</button>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:.82rem;color:var(--txt2);display:block;margin-bottom:6px">Or enter manually:</label>
+        <input type="text" id="manual-location-input" placeholder="e.g., Hyderabad, Delhi, Mumbai, London..." class="location-input">
+        <div style="font-size:.72rem;color:var(--txt3);margin-top:6px;font-style:italic;">💡 e.g., "Hyderabad" will search Hyderabad, Bangalore, Chennai & more</div>
+      </div>
+
+      <button class="btn btn-primary btn-sm" id="confirm-location-btn" style="width:100%">Confirm Location</button>
+    </div>
+  </div>
 
   <script src="/static/js/main.js"></script>
 </body>

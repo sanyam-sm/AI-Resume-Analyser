@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&family=Merriweather:wght@400;700&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif;
+      font-size: 11pt;
+      line-height: 1.65;
+      color: #1a1a2e;
+      background: #ffffff;
+      padding: 0;
+      margin: 0;
+    }
+
+    /* ── Page wrapper ── */
+    .page {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 52px 60px 52px 60px;
+      min-height: 100vh;
+    }
+
+    /* ── Header accent bar ── */
+    .accent-bar {
+      width: 100%;
+      height: 4px;
+      background: linear-gradient(90deg, #7c3aed, #06b6d4);
+      border-radius: 2px;
+      margin-bottom: 36px;
+    }
+
+    /* ── Candidate block ── */
+    .candidate-block {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 32px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .candidate-name {
+      font-family: 'Merriweather', Georgia, serif;
+      font-size: 20pt;
+      font-weight: 700;
+      color: #0f172a;
+      letter-spacing: -0.3px;
+      line-height: 1.2;
+    }
+
+    .candidate-contact {
+      text-align: right;
+      font-size: 9.5pt;
+      color: #64748b;
+      line-height: 1.8;
+    }
+
+    .candidate-contact span {
+      display: block;
+    }
+
+    /* ── Date ── */
+    .letter-date {
+      font-size: 10pt;
+      color: #64748b;
+      margin-bottom: 28px;
+    }
+
+    /* ── Salutation ── */
+    .salutation {
+      font-size: 11pt;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 18px;
+    }
+
+    /* ── Body paragraphs ── */
+    .letter-body p {
+      margin-bottom: 16px;
+      text-align: justify;
+      hyphens: auto;
+      color: #1e293b;
+    }
+
+    /* ── Closing ── */
+    .closing-block {
+      margin-top: 32px;
+    }
+
+    .closing-word {
+      font-size: 11pt;
+      color: #1e293b;
+      margin-bottom: 36px;
+    }
+
+    .signature-name {
+      font-family: 'Merriweather', Georgia, serif;
+      font-size: 13pt;
+      font-weight: 700;
+      color: #0f172a;
+      border-top: 1.5px solid #7c3aed;
+      padding-top: 10px;
+      display: inline-block;
+    }
+
+    /* ── Footer ── */
+    .letter-footer {
+      margin-top: 48px;
+      padding-top: 16px;
+      border-top: 1px solid #e2e8f0;
+      text-align: center;
+      font-size: 8pt;
+      color: #94a3b8;
+      letter-spacing: 0.04em;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <!-- Top accent -->
+    <div class="accent-bar"></div>
+
+    <!-- Candidate header -->
+    <div class="candidate-block">
+      <div class="candidate-name">{{ candidate_name }}</div>
+      <div class="candidate-contact">
+        {% if candidate_email %}<span>{{ candidate_email }}</span>{% endif %}
+        {% if candidate_phone %}<span>{{ candidate_phone }}</span>{% endif %}
+      </div>
+    </div>
+
+    <!-- Date -->
+    <div class="letter-date">{{ letter_date }}</div>
+
+    <!-- Letter body rendered from AI output -->
+    <div class="letter-body">
+      {{ body_html | safe }}
+    </div>
+
+    <!-- Closing -->
+    <div class="closing-block">
+      <div class="closing-word">Sincerely,</div>
+      <div class="signature-name">{{ candidate_name }}</div>
+    </div>
+
+
+  </div>
+</body>
+</html>

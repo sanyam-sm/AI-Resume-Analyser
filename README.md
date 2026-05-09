@@ -26,6 +26,8 @@ AI Resume Analyzer is a comprehensive resume analysis platform that combines **X
 - **Extracts structured data** (name, email, phone, skills, experience, education) using BERT NER
 - **Scores resumes** on a 100-point scale across 9 critical sections
 - **Matches candidates** to 18 predefined job roles with skill gap analysis
+- **Analyzes job descriptions** and compares with resume for optimal match
+- **Generates cover letters** tailored to job requirements and candidate profile
 - **Recommends projects** using Gemini 2.0 Flash AI based on detected skills
 - **Suggests courses** from YouTube, Coursera, and Udemy for skill development
 
@@ -42,6 +44,8 @@ AI Resume Analyzer is a comprehensive resume analysis platform that combines **X
 | **52 Job Categories** | Data Science, Python Developer, DevOps Engineer, Java Developer, React Developer, Blockchain, and more |
 | **Resume Scoring (0-100)** | 9-section heuristic scoring: Contact Info, Summary, Education, Experience, Skills, Projects, Certifications, Achievements, Hobbies |
 | **Job Role Matching** | Matches against 18 job roles with skill gap analysis (Core: 70%, Preferred: 30%) |
+| **Job Description Analysis** | Analyzes job postings and compares with resume for skill alignment and match percentage |
+| **AI-Generated Cover Letters** | Automatically generates personalized cover letters based on resume and job requirements |
 | **AI-Powered Project Ideas** | Gemini 2.0 Flash generates personalized project suggestions based on skills |
 | **Smart Course Recommendations** | YouTube Data API v3 + curated database of 30+ courses |
 | **Experience Level Detection** | Automatically classifies as Fresher, Junior, Mid-Level, or Senior |
@@ -468,7 +472,25 @@ Compares candidate skills against 18 job role profiles:
 | **Hobbies/Interests** | 5 pts | Personal interests |
 | **Total** | **100 pts** | Overall resume strength |
 
-### 5. AI-Powered Recommendations
+### 5. Job Description Analysis & Resume Matching
+
+Compares resume content against job descriptions to evaluate candidate fitness:
+
+- **Skill Alignment:** Identifies core skills required vs. candidate's skills
+- **Match Percentage:** Calculates overall compatibility score
+- **Gap Analysis:** Highlights missing skills and experience
+- **Recommendations:** Suggests improvements to increase match percentage
+
+### 6. AI-Generated Cover Letters
+
+Automatically generates customized cover letters using AI:
+
+- **Job-Specific Content:** Tailored to job description and requirements
+- **Candidate-Focused:** Incorporates resume information and strengths
+- **Professional Format:** Maintains proper business letter structure
+- **Quick Application:** Ready-to-use, requiring minimal edits
+
+### 7. AI-Powered Recommendations
 
 **Project Ideas:**
 - Gemini 2.0 Flash generates personalized project suggestions
@@ -604,6 +626,51 @@ Get metadata about the loaded ML model.
 ### `GET /api/demo`
 
 Returns a demo analysis without file upload (for testing).
+
+### `POST /api/analyze-jd`
+
+Analyze a job description and compare with resume for match percentage.
+
+**Request:**
+```bash
+curl -X POST http://localhost:5000/api/analyze-jd \
+  -H "Content-Type: application/json" \
+  -d '{"job_description": "Looking for a Python developer with 3+ years experience...", "resume": "resume_text_or_extracted_data"}'
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "match_percentage": 78,
+  "core_skills_match": 85,
+  "preferred_skills_match": 60,
+  "required_skills": ["Python", "Flask", "PostgreSQL"],
+  "missing_skills": ["Kubernetes", "AWS"],
+  "recommendations": ["Learn Kubernetes for better match", "Gain AWS certification"],
+  "analysis": "Strong candidate with solid Python background. Needs DevOps skills."
+}
+```
+
+### `POST /api/generate-cover-letter`
+
+Generate a customized cover letter based on resume and job requirements.
+
+**Request:**
+```bash
+curl -X POST http://localhost:5000/api/generate-cover-letter \
+  -H "Content-Type: application/json" \
+  -d '{"job_description": "...", "resume": "...", "company_name": "TechCorp"}'
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "cover_letter": "[Date]\n\nDear Hiring Manager,\n\nI am writing to express my strong interest in the [Job Title] position...",
+  "generated_at": "2026-05-09T10:30:00Z"
+}
+```
 
 ---
 
@@ -955,6 +1022,16 @@ git push origin feature/your-feature-name
 
 ## 📝 Roadmap
 
+### ✅ Completed Features
+- [x] Job Description (JD) Analysis and matching
+- [x] AI-generated Cover Letter generation
+- [x] Resume scoring and analysis
+- [x] BERT-based NER for information extraction
+- [x] Multi-model ML classification (XGBoost, LightGBM)
+- [x] AI-powered project recommendations
+- [x] Course recommendations from YouTube/Coursera
+
+### 🔄 In Progress / Planned
 - [ ] Add user authentication and resume history
 - [ ] Implement batch processing API
 - [ ] Deploy to cloud (AWS/GCP/Azure)

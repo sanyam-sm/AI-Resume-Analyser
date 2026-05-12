@@ -71,7 +71,7 @@ app.secret_key = os.environ.get('SECRET_KEY', 'resume-analyzer-dev-key')
 ALLOWED         = {'pdf'}
 YOUTUBE_API_KEY = os.environ.get('YOUTUBE_API_KEY', '')
 JSEARCH_API_KEY = os.environ.get('JSEARCH_API_KEY', '')
-MODEL_DIR       = Path(r'notebooks\models')
+MODEL_DIR = Path('notebooks') / 'models'
 UPLOAD_TTL_SECONDS = 3 * 60 * 60
 _LAST_UPLOAD_CLEANUP_CHECK = 0.0
 _SHUTDOWN_IN_PROGRESS = False
@@ -154,9 +154,19 @@ def load_models():
 
 
 print("Loading models...")
-models = load_models()
-ner_status = 'BERT NER ✓' if models['ner_extractor'] else 'Regex fallback (BERT unavailable)'
-print(f"Ready!  ML: {models['mode']} | Extraction: {ner_status}")
+# models = load_models()
+# --- Replace the old 'models = load_models()' with this ---
+models = None 
+
+def get_models():
+    """Helper to load models only when needed (Lazy Loading)"""
+    global models
+    if models is None:
+        print("🚀 Lazy loading models now (BERT + XGBoost)...")
+        models = load_models()
+    return models
+# ner_status = 'BERT NER ✓' if models['ner_extractor'] else 'Regex fallback (BERT unavailable)'
+# print(f"Ready!  ML: {models['mode']} | Extraction: {ner_status}")
 print(f"  YouTube API : {'configured ✓' if YOUTUBE_API_KEY else 'not set'}")
 print(f"  Gemini API  : {'configured ✓ (edu/exp extraction)' if os.environ.get('GEMINI_API_KEY') else 'not set (regex fallback for edu/exp)'}")
 print(f"  Groq API    : {'configured ✓ (cover letter generation)' if os.environ.get('GROQ_API_KEY') else 'not set (cover letter unavailable)'}")
@@ -397,13 +407,13 @@ def _keyword_predict(raw_text: str) -> str:
     return max(scores, key=scores.get) if scores else None
 
 
-def _predict_domain(tfidf_vec, raw_text: str = ''):
+def _predict_domain(tfidf_vec, raw_text: str = '', current_models=None):
     """
     ML classification with keyword fallback when confidence < threshold.
-    Handles both XGBoost (predict_proba) and LinearSVC (decision_function).
     """
-    ml_model = models['ml_model']
-    le       = models['label_encoder']
+    # Use the passed-in models instead of the global 'models'
+    ml_model = current_models['ml_model']
+    le       = current_models['label_encoder']
 
     pred_id            = ml_model.predict(tfidf_vec)[0]
     predicted_category = le.classes_[pred_id]
@@ -423,11 +433,9 @@ def _predict_domain(tfidf_vec, raw_text: str = ''):
 
     top_confidence = top_predictions[0]['confidence']
 
-    # ── Keyword override when model is uncertain ──────────────────────────────
     if top_confidence < CONFIDENCE_THRESHOLD and raw_text:
         keyword_cat = _keyword_predict(raw_text)
         if keyword_cat and keyword_cat != predicted_category:
-            print(f"  ⚠ Low ML confidence ({top_confidence:.1f}%) → keyword override: {keyword_cat}")
             predicted_category = keyword_cat
             exists = next((p for p in top_predictions if p['label'] == keyword_cat), None)
             if exists:
@@ -447,18 +455,22 @@ def index():
 
 @app.route('/api/model-info')
 def api_model_info():
-    meta = models['meta']
+    # --- ADD THIS LINE TO TRIGGER LOADING ---
+    current_models = get_models() 
+    
+    meta = current_models['meta']
     if not meta:
         return jsonify({'status': 'error', 'message': 'Models not loaded. Run the training notebook first.'}), 503
+    
     return jsonify({
         'status'       : 'ok',
         'model_name'   : meta.get('best_model_name', 'Unknown'),
-        'model_mode'   : models['mode'],
+        'model_mode'   : current_models['mode'],
         'accuracy'     : round(meta.get('accuracy',    0) * 100, 2),
         'f1_weighted'  : round(meta.get('f1_weighted', 0) * 100, 2),
         'f1_macro'     : round(meta.get('f1_macro',    0) * 100, 2),
-        'ner_model'    : 'yashpwr/resume-ner-bert-v2' if models['ner_extractor'] else 'Regex fallback',
-        'ner_available': models['ner_extractor'] is not None,
+        'ner_model'    : 'yashpwr/resume-ner-bert-v2' if current_models['ner_extractor'] else 'Regex fallback',
+        'ner_available': current_models['ner_extractor'] is not None,
         'num_classes'  : meta.get('num_classes',    0),
         'classes'      : meta.get('classes',       []),
         'train_samples': meta.get('train_samples', 0),
@@ -467,11 +479,15 @@ def api_model_info():
         'cv_std'       : round(meta.get('cv_std',  0) * 100, 2),
         'all_results'  : meta.get('all_results',  {}),
     })
-
-
+    
+    
 @app.route('/api/analyze', methods=['POST'])
 def api_analyze():
     global _LAST_UPLOAD_CLEANUP_CHECK
+    
+    # --- TRIGGER LAZY LOAD ---
+    current_models = get_models()
+
     now = time.time()
     if now - _LAST_UPLOAD_CLEANUP_CHECK > 300:
         _cleanup_expired_uploads()
@@ -482,8 +498,9 @@ def api_analyze():
     file = request.files['resume']
     if file.filename == '' or not allowed_file(file.filename):
         return jsonify({'status': 'error', 'message': 'Only PDF files are accepted.'}), 400
-    if models['mode'] == 'none':
-        return jsonify({'status': 'error', 'message': 'ML model not loaded. Run the training notebook first.'}), 503
+    
+    if current_models['mode'] == 'none':
+        return jsonify({'status': 'error', 'message': 'ML model not loaded.'}), 503
 
     tmp_path = app.config['UPLOAD_FOLDER'] / f"{uuid.uuid4().hex}.pdf"
 
@@ -491,21 +508,16 @@ def api_analyze():
         file.save(tmp_path)
         raw_text = extract_text_from_pdf(str(tmp_path))
         if not raw_text.strip():
-            return jsonify({'status': 'error', 'message': 'Could not extract text. Ensure the PDF is not a scanned image.'}), 422
+            return jsonify({'status': 'error', 'message': 'Could not extract text.'}), 422
 
-        # Store resume text in session for JD matching
         session['resume_text'] = raw_text[:8000]
-
         pages      = count_pages(str(tmp_path))
         word_count = len(raw_text.split())
 
-        # ── Entity Extraction ─────────────────────────────────────────────────
-        # BERT NER handles: name, email, skills, locations, years_of_experience
-        # Gemini (called inside BERT extractor): education + experience entries only
-        # Regex: phone always + fallback when BERT unavailable
-        if models['ner_extractor']:
+        # ── Entity Extraction using current_models ───────────────────────────
+        if current_models['ner_extractor']:
             try:
-                ner_results = models['ner_extractor'].extract(raw_text)
+                ner_results = current_models['ner_extractor'].extract(raw_text)
             except Exception as e:
                 print(f"  BERT NER error: {e} — using regex fallback")
                 ner_results = {
@@ -515,7 +527,6 @@ def api_analyze():
                     'experience_entries': [], 'education_entries': [], 'all_entities': {},
                 }
         else:
-            print("  BERT NER unavailable — using regex fallback")
             ner_results = {
                 'name': extract_name(raw_text), 'email': extract_email(raw_text),
                 'phone': extract_phone(raw_text), 'skills': [],
@@ -527,17 +538,15 @@ def api_analyze():
         email = ner_results.get('email', '') or extract_email(raw_text)
         phone = ner_results.get('phone', '') or extract_phone(raw_text)
 
-        # ── Skills: NER/Gemini + keyword merge ────────────────────────────────
         ner_skill_items     = ner_results.get('skills', [])
         keyword_skill_items = extract_skills_by_keyword(raw_text)
         skill_items         = merge_skills(ner_skill_items, keyword_skill_items)
 
-        # ── Domain Classification ─────────────────────────────────────────────
+        # ── Domain Classification using current_models ───────────────────────
         cleaned                             = clean_text(raw_text)
-        tfidf_vec                           = models['tfidf'].transform([cleaned])
-        predicted_category, top_predictions = _predict_domain(tfidf_vec, raw_text)
+        tfidf_vec                           = current_models['tfidf'].transform([cleaned])
+        predicted_category, top_predictions = _predict_domain(tfidf_vec, raw_text, current_models)
 
-        # ── Experience Level ──────────────────────────────────────────────────
         level   = detect_experience_level(raw_text, pages)
         ner_exp = ner_results.get('years_of_experience', '')
         if ner_exp:
@@ -546,11 +555,8 @@ def api_analyze():
                 yrs   = max(int(y) for y in exp_nums)
                 level = 'Senior' if yrs >= 5 else 'Mid-Level' if yrs >= 2 else 'Junior'
 
-        # ── Job Matching + Skill Gaps ─────────────────────────────────────────
-        job_matches = compute_job_matches(skill_items, top_n=5,
-                                          predicted_category=predicted_category)
-        skill_gaps  = compute_skill_gaps(skill_items,
-                                         predicted_category=predicted_category)
+        job_matches = compute_job_matches(skill_items, top_n=5, predicted_category=predicted_category)
+        skill_gaps  = compute_skill_gaps(skill_items, predicted_category=predicted_category)
 
         seen, unique_missing = set(), []
         for gap in skill_gaps:
@@ -559,30 +565,21 @@ def api_analyze():
                     unique_missing.append(s)
                     seen.add(s)
 
-        # ── Projects + Courses ────────────────────────────────────────────────
-        project_ideas = get_project_ideas(skill_items, max_projects=4,
-                                          experience_level=level)
+        project_ideas = get_project_ideas(skill_items, max_projects=4, experience_level=level)
         courses       = get_courses_for_gaps(unique_missing, predicted_category, max_courses=6)
+        scoring       = score_resume(raw_text)
 
-        # ── Resume Score ──────────────────────────────────────────────────────
-        scoring = score_resume(raw_text)
-
-        # ── PDF preview ───────────────────────────────────────────────────────
         with open(tmp_path, 'rb') as f:
             pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
 
         resume_payload = {
-            'name': name,
-            'email': email,
-            'phone': phone,
-            'category': predicted_category,
-            'experience_level': level,
+            'name': name, 'email': email, 'phone': phone,
+            'category': predicted_category, 'experience_level': level,
             'skills': [s['text'] if isinstance(s, dict) else s for s in skill_items],
             'years_of_experience': ner_results.get('years_of_experience', ''),
             'experience_entries': ner_results.get('experience_entries', []),
             'education_entries': ner_results.get('education_entries', []),
-            'uploaded_pdf_path': str(tmp_path),
-            'uploaded_pdf_name': file.filename,
+            'uploaded_pdf_path': str(tmp_path), 'uploaded_pdf_name': file.filename,
         }
         session['resume_apply_data'] = resume_payload
         session['uploaded_resume_path'] = str(tmp_path)
@@ -590,45 +587,30 @@ def api_analyze():
 
         return jsonify({
             'status'   : 'success',
-            'extracted': {
-                'name': name, 'email': email, 'phone': phone,
-                'pages': pages, 'word_count': word_count,
-            },
+            'extracted': {'name': name, 'email': email, 'phone': phone, 'pages': pages, 'word_count': word_count},
             'ner_entities': {
                 'experience_entries' : ner_results.get('experience_entries', []),
                 'education_entries'  : ner_results.get('education_entries',  []),
                 'years_of_experience': ner_results.get('years_of_experience', ''),
-                'locations'          : [
-                    e if isinstance(e, dict) else {'text': e}
-                    for e in ner_results.get('locations', [])
-                ],
+                'locations': [e if isinstance(e, dict) else {'text': e} for e in ner_results.get('locations', [])],
             },
             'prediction': {
-                'category'        : predicted_category,
-                'experience_level': level,
-                'top_predictions' : top_predictions,
-                'model_used'      : models['mode'],
+                'category': predicted_category, 'experience_level': level,
+                'top_predictions': top_predictions, 'model_used': current_models['mode'],
             },
             'skills': {
-                'current'                : [s['text'] if isinstance(s, dict) else s for s in skill_items],
+                'current': [s['text'] if isinstance(s, dict) else s for s in skill_items],
                 'current_with_confidence': skill_items,
             },
-            'job_matches'  : job_matches,
-            'skill_gaps'   : skill_gaps,
-            'project_ideas': project_ideas,
-            'score'        : scoring,
-            'courses'      : courses,
-            'pdf_preview'  : pdf_b64,
+            'job_matches': job_matches, 'skill_gaps': skill_gaps,
+            'project_ideas': project_ideas, 'score': scoring,
+            'courses': courses, 'pdf_preview': pdf_b64,
         })
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 500
-
-    finally:
-        pass
-
 
 @app.route('/api/cleanup-resume', methods=['POST'])
 def api_cleanup_resume():
@@ -807,7 +789,7 @@ def api_demo():
                 {'label': 'Database',         'confidence':  1.5},
                 {'label': 'Hadoop',           'confidence':  1.0},
             ],
-            'model_used': models['mode'],
+            'model_used': get_models()['mode'],
         },
         'skills': {
             'current': ['Python', 'Machine Learning', 'SQL', 'TensorFlow', 'Data Analysis',

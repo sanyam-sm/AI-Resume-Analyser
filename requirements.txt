@@ -37,3 +37,4 @@ playwright-stealth>=1.0.6
 
 weasyprint
 
+gunicorn>=21.2.0
